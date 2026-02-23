@@ -1,0 +1,132 @@
+.wrapper {
+  background: var(--bg-secondary);
+}
+
+/* ── Tab bar ────────────────────────────────────────────────── */
+.tabBar {
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  padding: 0.5rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.15s;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+}
+
+.tabActive {
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--blue);
+}
+
+/* ── Shared header row ──────────────────────────────────────── */
+.header {
+  color: var(--text-secondary);
+}
+
+/* ── Ask / Bid rows ─────────────────────────────────────────── */
+.askPrice {
+  position: relative;
+  color: var(--red);
+}
+
+.bidPrice {
+  position: relative;
+  color: var(--green);
+}
+
+.rowQty {
+  position: relative;
+  color: var(--text-primary);
+}
+
+.rowTotal {
+  position: relative;
+  color: var(--text-secondary);
+}
+
+/* ── Depth bar overlays ─────────────────────────────────────── */
+.askBar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  background: rgba(246, 70, 93, 0.12);
+  pointer-events: none;
+}
+
+.bidBar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(14, 203, 129, 0.12);
+  pointer-events: none;
+}
+
+/* ── Mid-price / spread row ─────────────────────────────────── */
+.midRow {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.midPrice {
+  font-weight: 700;
+  font-size: 0.875rem;
+}
+
+.spreadLabel {
+  color: var(--text-secondary);
+}
+
+/* ── Bid / Ask volume bar ───────────────────────────────────── */
+.volBarWrapper {
+  border-top: 1px solid var(--border);
+}
+
+.volTrack {
+  width: 100%;
+  border-radius: 9999px;
+  overflow: hidden;
+  height: 6px;
+}
+
+.volBidSegment {
+  height: 100%;
+  background: var(--green);
+}
+
+.volAskSegment {
+  height: 100%;
+  background: var(--red);
+}
+
+.volLabels {
+  margin-top: 0.25rem;
+}
+
+.volBidLabel {
+  color: var(--green);
+}
+
+.volAskLabel {
+  color: var(--red);
+}
+
+/* ── Recent Trades tab ──────────────────────────────────────── */
+.tradesBuyPrice {
+  color: var(--green);
+}
+
+.tradesSellPrice {
+  color: var(--red);
+}
+
+.tradesEmpty {
+  color: var(--text-secondary);
+}
