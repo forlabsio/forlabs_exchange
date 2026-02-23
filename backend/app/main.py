@@ -2,7 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, market, ws, orders, wallet
+from app.routers import auth, market, ws, orders, wallet, bots, admin
 from app.core.redis import get_redis
 from app.services.market_data import market_data_loop
 
@@ -29,6 +29,8 @@ app.include_router(market.router)
 app.include_router(ws.router)
 app.include_router(orders.router)
 app.include_router(wallet.router)
+app.include_router(bots.router)
+app.include_router(admin.router)
 
 @app.get("/health")
 async def health():
