@@ -15,6 +15,7 @@ interface PairListStore {
   allPairs: BinanceTicker[];
   searchQuery: string;
   loading: boolean;
+  error: string | null;
   fetchPairs: () => Promise<void>;
   setSearchQuery: (q: string) => void;
   getFilteredPairs: () => BinanceTicker[];
@@ -24,11 +25,13 @@ export const usePairListStore = create<PairListStore>((set, get) => ({
   allPairs: [],
   searchQuery: "",
   loading: false,
+  error: null,
 
   fetchPairs: async () => {
-    set({ loading: true });
+    set({ loading: true, error: null });
     try {
       const res = await fetch("https://api.binance.com/api/v3/ticker/24hr");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: Array<{
         symbol: string;
         lastPrice: string;
@@ -42,7 +45,7 @@ export const usePairListStore = create<PairListStore>((set, get) => ({
       const usdtPairs: BinanceTicker[] = data
         .filter((item) => item.symbol.endsWith("USDT"))
         .map((item) => {
-          const base = item.symbol.replace("USDT", "");
+          const base = item.symbol.slice(0, -4);
           return {
             symbol: `${base}_USDT`,
             displaySymbol: `${base}/USDT`,
@@ -59,8 +62,8 @@ export const usePairListStore = create<PairListStore>((set, get) => ({
         );
 
       set({ allPairs: usdtPairs });
-    } catch {
-      // silently fail; consumers can check allPairs.length === 0
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) });
     } finally {
       set({ loading: false });
     }
