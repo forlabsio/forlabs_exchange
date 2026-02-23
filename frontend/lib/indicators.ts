@@ -52,7 +52,7 @@ export function calcBOLL(
   for (let i = period - 1; i < data.length; i++) {
     const slice = data.slice(i - period + 1, i + 1).map((d) => d.close);
     const mean = slice.reduce((s, v) => s + v, 0) / period;
-    const variance = slice.reduce((s, v) => s + (v - mean) ** 2, 0) / (period - 1);
+    const variance = slice.reduce((s, v) => s + (v - mean) ** 2, 0) / period;
     const std = Math.sqrt(variance);
     result.push({
       time: data[i].time,
