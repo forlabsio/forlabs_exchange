@@ -1,138 +1,307 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { createChart, IChartApi, ISeriesApi, CandlestickSeries } from "lightweight-charts";
+import { useEffect, useRef, useState, useCallback } from "react";
+import {
+  createChart,
+  IChartApi,
+  ISeriesApi,
+  CandlestickSeries,
+  LineSeries,
+  HistogramSeries,
+  UTCTimestamp,
+} from "lightweight-charts";
 import { apiFetch } from "@/lib/api";
+import styles from "./ChartWidget.module.css";
+import {
+  KlinePoint,
+  calcMA, calcEMA, calcBOLL, calcSAR,
+  calcVOL, calcMACD, calcRSI, calcKDJ, calcWR, calcDMI, calcCCI, calcOBV,
+} from "@/lib/indicators";
 
 const INTERVALS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"] as const;
 const INTERVAL_LABELS: Record<string, string> = {
   "1m": "1분", "5m": "5분", "15m": "15분", "30m": "30분",
   "1h": "1시간", "4h": "4시간", "1d": "1일", "1w": "1주",
 };
-
 const INDICATORS = ["MA", "EMA", "BOLL", "SAR", "VOL", "MACD", "RSI", "KDJ", "WR", "DMI", "CCI", "OBV"] as const;
+
+// Cast numeric unix timestamps to UTCTimestamp for lightweight-charts
+function toTS<T extends { time: number }>(arr: T[]): (Omit<T, "time"> & { time: UTCTimestamp })[] {
+  return arr as unknown as (Omit<T, "time"> & { time: UTCTimestamp })[];
+}
 
 export default function ChartWidget({ pair }: { pair: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const klineDataRef = useRef<KlinePoint[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const overlaySeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const subPaneSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());
+  const subPaneRef = useRef<Map<string, number>>(new Map());
+
   const [interval, setIntervalState] = useState("1h");
   const [activeIndicators, setActiveIndicators] = useState<Set<string>>(new Set());
 
   const toggleIndicator = (name: string) => {
-    setActiveIndicators(prev => {
+    setActiveIndicators((prev) => {
       const next = new Set(prev);
       next.has(name) ? next.delete(name) : next.add(name);
       return next;
     });
   };
 
-  const loadData = async (iv: string) => {
-    if (!seriesRef.current) return;
-    try {
-      const data = await apiFetch(`/api/market/${pair}/klines?interval=${iv}&limit=500`);
-      seriesRef.current.setData(
+  const removeIndicator = useCallback((key: string) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const overlaySeries = overlaySeriesRef.current.get(key);
+    if (overlaySeries) {
+      overlaySeries.forEach((s) => { try { chart.removeSeries(s); } catch { /* ignore */ } });
+      overlaySeriesRef.current.delete(key);
+    }
+    const subSeries = subPaneSeriesRef.current.get(key);
+    if (subSeries) {
+      subSeries.forEach((s) => { try { chart.removeSeries(s); } catch { /* ignore */ } });
+      subPaneSeriesRef.current.delete(key);
+    }
+    const paneIndex = subPaneRef.current.get(key);
+    if (paneIndex !== undefined) {
+      try { chart.removePane(paneIndex); } catch { /* ignore */ }
+      subPaneRef.current.delete(key);
+    }
+  }, []);
+
+  const syncIndicators = useCallback((active: Set<string>) => {
+    const chart = chartRef.current;
+    const data = klineDataRef.current;
+    if (!chart || data.length === 0) return;
+
+    // Remove stale indicators
+    const allKeys = new Set([
+      ...overlaySeriesRef.current.keys(),
+      ...subPaneSeriesRef.current.keys(),
+    ]);
+    for (const key of allKeys) {
+      if (!active.has(key)) removeIndicator(key);
+    }
+
+    for (const key of active) {
+      if (overlaySeriesRef.current.has(key) || subPaneSeriesRef.current.has(key)) continue;
+
+      if (key === "MA") {
+        const periods = [7, 25, 99];
+        const colors = ["#f6a600", "#f0c419", "#cd84f1"];
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        data.map((k: any) => ({
-          time: k.time as number,
-          open: parseFloat(k.open),
-          high: parseFloat(k.high),
-          low: parseFloat(k.low),
-          close: parseFloat(k.close),
-        }))
-      );
+        const series: ISeriesApi<any>[] = [];
+        periods.forEach((p, idx) => {
+          const s = chart.addSeries(LineSeries, {
+            color: colors[idx], lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+          }, 0);
+          s.setData(toTS(calcMA(data, p)));
+          series.push(s);
+        });
+        overlaySeriesRef.current.set("MA", series);
+
+      } else if (key === "EMA") {
+        const periods = [12, 26];
+        const colors = ["#1e90ff", "#ff69b4"];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const series: ISeriesApi<any>[] = [];
+        periods.forEach((p, idx) => {
+          const s = chart.addSeries(LineSeries, {
+            color: colors[idx], lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+          }, 0);
+          s.setData(toTS(calcEMA(data, p)));
+          series.push(s);
+        });
+        overlaySeriesRef.current.set("EMA", series);
+
+      } else if (key === "BOLL") {
+        const boll = calcBOLL(data);
+        const upper = chart.addSeries(LineSeries, { color: "#f6a600", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 0);
+        const middle = chart.addSeries(LineSeries, { color: "#1e90ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 0);
+        const lower = chart.addSeries(LineSeries, { color: "#f6a600", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, 0);
+        upper.setData(toTS(boll.map((d) => ({ time: d.time, value: d.upper }))));
+        middle.setData(toTS(boll.map((d) => ({ time: d.time, value: d.middle }))));
+        lower.setData(toTS(boll.map((d) => ({ time: d.time, value: d.lower }))));
+        overlaySeriesRef.current.set("BOLL", [upper, middle, lower]);
+
+      } else if (key === "SAR") {
+        const sar = calcSAR(data);
+        const s = chart.addSeries(LineSeries, {
+          color: "#ff6b6b", lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+        }, 0);
+        s.setData(toTS(sar));
+        overlaySeriesRef.current.set("SAR", [s]);
+
+      } else if (key === "VOL") {
+        const pane = chart.addPane();
+        const pIdx = pane.paneIndex();
+        const s = chart.addSeries(HistogramSeries, {
+          priceFormat: { type: "volume" }, priceScaleId: "vol",
+          priceLineVisible: false, lastValueVisible: false,
+        }, pIdx);
+        s.setData(toTS(calcVOL(data)));
+        subPaneSeriesRef.current.set("VOL", [s]);
+        subPaneRef.current.set("VOL", pIdx);
+
+      } else if (key === "MACD") {
+        const { macd, signal, hist } = calcMACD(data);
+        const pane = chart.addPane();
+        const pIdx = pane.paneIndex();
+        const histS = chart.addSeries(HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, pIdx);
+        const macdS = chart.addSeries(LineSeries, { color: "#1e90ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        const signalS = chart.addSeries(LineSeries, { color: "#ff69b4", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        histS.setData(toTS(hist));
+        macdS.setData(toTS(macd));
+        signalS.setData(toTS(signal));
+        subPaneSeriesRef.current.set("MACD", [histS, macdS, signalS]);
+        subPaneRef.current.set("MACD", pIdx);
+
+      } else if (key === "RSI") {
+        const pane = chart.addPane();
+        const pIdx = pane.paneIndex();
+        const s = chart.addSeries(LineSeries, { color: "#9b59b6", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        s.setData(toTS(calcRSI(data)));
+        subPaneSeriesRef.current.set("RSI", [s]);
+        subPaneRef.current.set("RSI", pIdx);
+
+      } else if (key === "KDJ") {
+        const { k, d, j } = calcKDJ(data);
+        const pane = chart.addPane();
+        const pIdx = pane.paneIndex();
+        const kS = chart.addSeries(LineSeries, { color: "#f6a600", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        const dS = chart.addSeries(LineSeries, { color: "#1e90ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        const jS = chart.addSeries(LineSeries, { color: "#00bfff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        kS.setData(toTS(k));
+        dS.setData(toTS(d));
+        jS.setData(toTS(j));
+        subPaneSeriesRef.current.set("KDJ", [kS, dS, jS]);
+        subPaneRef.current.set("KDJ", pIdx);
+
+      } else if (key === "WR") {
+        const pane = chart.addPane();
+        const pIdx = pane.paneIndex();
+        const s = chart.addSeries(LineSeries, { color: "#9b59b6", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        s.setData(toTS(calcWR(data)));
+        subPaneSeriesRef.current.set("WR", [s]);
+        subPaneRef.current.set("WR", pIdx);
+
+      } else if (key === "DMI") {
+        const { plusDI, minusDI, adx } = calcDMI(data);
+        const pane = chart.addPane();
+        const pIdx = pane.paneIndex();
+        const pS = chart.addSeries(LineSeries, { color: "#00ff7f", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        const mS = chart.addSeries(LineSeries, { color: "#ff4444", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        const aS = chart.addSeries(LineSeries, { color: "#f6a600", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        pS.setData(toTS(plusDI));
+        mS.setData(toTS(minusDI));
+        aS.setData(toTS(adx));
+        subPaneSeriesRef.current.set("DMI", [pS, mS, aS]);
+        subPaneRef.current.set("DMI", pIdx);
+
+      } else if (key === "CCI") {
+        const pane = chart.addPane();
+        const pIdx = pane.paneIndex();
+        const s = chart.addSeries(LineSeries, { color: "#9b59b6", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        s.setData(toTS(calcCCI(data)));
+        subPaneSeriesRef.current.set("CCI", [s]);
+        subPaneRef.current.set("CCI", pIdx);
+
+      } else if (key === "OBV") {
+        const pane = chart.addPane();
+        const pIdx = pane.paneIndex();
+        const s = chart.addSeries(LineSeries, { color: "#1e90ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, pIdx);
+        s.setData(toTS(calcOBV(data)));
+        subPaneSeriesRef.current.set("OBV", [s]);
+        subPaneRef.current.set("OBV", pIdx);
+      }
+    }
+  }, [removeIndicator]);
+
+  const loadData = useCallback(async (iv: string) => {
+    if (!candleSeriesRef.current) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw = await apiFetch(`/api/market/${pair}/klines?interval=${iv}&limit=500`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const klines: KlinePoint[] = raw.map((k: any) => ({
+        time: k.time as number,
+        open: parseFloat(k.open),
+        high: parseFloat(k.high),
+        low: parseFloat(k.low),
+        close: parseFloat(k.close),
+        volume: parseFloat(k.volume),
+      }));
+      candleSeriesRef.current.setData(toTS(klines));
+      klineDataRef.current = klines;
+      // Clear and re-render all active indicators with fresh data
+      for (const key of [
+        ...overlaySeriesRef.current.keys(),
+        ...subPaneSeriesRef.current.keys(),
+      ]) {
+        removeIndicator(key);
+      }
+      setActiveIndicators((prev) => {
+        syncIndicators(prev);
+        return prev;
+      });
     } catch (e) {
       console.error("Failed to load klines", e);
     }
-  };
+  }, [pair, syncIndicators, removeIndicator]);
 
+  // Create chart once on mount
   useEffect(() => {
     if (!containerRef.current) return;
-
     const chart = createChart(containerRef.current, {
+      autoSize: true,
       layout: { background: { color: "#0b0e11" }, textColor: "#848e9c" },
       grid: { vertLines: { color: "#2b3139" }, horzLines: { color: "#2b3139" } },
       rightPriceScale: { borderColor: "#2b3139" },
       timeScale: { borderColor: "#2b3139", timeVisible: true, secondsVisible: false },
-      width: containerRef.current.clientWidth,
-      height: containerRef.current.clientHeight,
     });
-
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: "#0ecb81",
-      downColor: "#f6465d",
-      borderUpColor: "#0ecb81",
-      borderDownColor: "#f6465d",
-      wickUpColor: "#0ecb81",
-      wickDownColor: "#f6465d",
+      upColor: "#0ecb81", downColor: "#f6465d",
+      borderUpColor: "#0ecb81", borderDownColor: "#f6465d",
+      wickUpColor: "#0ecb81", wickDownColor: "#f6465d",
     });
-
     chartRef.current = chart;
-    seriesRef.current = series;
-    loadData("1h");
+    candleSeriesRef.current = series;
+    return () => { chart.remove(); };
+  }, []);
 
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current && chart) {
-        chart.applyOptions({
-          width: containerRef.current.clientWidth,
-          height: containerRef.current.clientHeight,
-        });
-      }
-    });
-    ro.observe(containerRef.current);
+  // Reload klines when pair or interval changes
+  useEffect(() => {
+    loadData(interval);
+  }, [pair, interval, loadData]);
 
-    return () => {
-      ro.disconnect();
-      chart.remove();
-    };
-  }, [pair]);
-
-  const handleIntervalChange = (iv: string) => {
-    setIntervalState(iv);
-    loadData(iv);
-  };
+  // Sync indicators when active set changes
+  useEffect(() => {
+    syncIndicators(activeIndicators);
+  }, [activeIndicators, syncIndicators]);
 
   return (
     <div className="flex flex-col h-full">
-      {/* Interval + Indicator toolbar */}
-      <div className="flex items-center gap-1 px-3 py-1.5 border-b flex-shrink-0"
-        style={{ borderColor: "var(--border)", background: "var(--bg-secondary)" }}>
+      <div className={`flex items-center gap-1 px-3 py-1.5 border-b flex-shrink-0 ${styles.toolbar}`}>
         {INTERVALS.map((iv) => (
-          <button key={iv} onClick={() => handleIntervalChange(iv)}
-            className="px-2 py-0.5 rounded text-xs transition-colors cursor-pointer"
-            style={{
-              color: interval === iv ? "var(--text-primary)" : "var(--text-secondary)",
-              background: interval === iv ? "var(--bg-panel)" : "transparent",
-              fontWeight: interval === iv ? "600" : "400",
-            }}>
+          <button key={iv} type="button" onClick={() => setIntervalState(iv)}
+            className={`px-2 py-0.5 rounded text-xs transition-colors cursor-pointer ${styles.intervalBtn}`}
+            data-active={interval === iv ? "true" : "false"}>
             {INTERVAL_LABELS[iv]}
           </button>
         ))}
-
-        {/* Separator */}
-        <span style={{ borderLeft: "1px solid var(--border)", height: "12px", display: "inline-block", margin: "0 6px" }} />
-
-        {/* Indicator buttons */}
+        <span className={styles.separator} />
         {INDICATORS.map((name) => (
-          <button key={name} onClick={() => toggleIndicator(name)}
-            className="px-2 py-0.5 rounded text-xs transition-colors cursor-pointer"
-            style={{
-              color: activeIndicators.has(name) ? "var(--text-primary)" : "var(--text-secondary)",
-              background: activeIndicators.has(name) ? "var(--bg-panel)" : "transparent",
-            }}>
+          <button key={name} type="button" onClick={() => toggleIndicator(name)}
+            className={`px-2 py-0.5 rounded text-xs transition-colors cursor-pointer ${styles.indicatorBtn}`}
+            data-active={activeIndicators.has(name) ? "true" : "false"}>
             {name}
           </button>
         ))}
-
-        {/* Eye and dropdown buttons pushed to the right */}
         <div className="ml-auto flex items-center">
-          <button type="button" className="px-2 py-0.5 text-xs cursor-pointer"
-            style={{ color: "var(--text-secondary)" }}>
-            👁
-          </button>
-          <button type="button" className="px-2 py-0.5 text-xs cursor-pointer"
-            style={{ color: "var(--text-secondary)" }}>
-            ▾
-          </button>
+          <button type="button" className={`px-2 py-0.5 text-xs cursor-pointer ${styles.iconBtn}`}>👁</button>
+          <button type="button" className={`px-2 py-0.5 text-xs cursor-pointer ${styles.iconBtn}`}>▾</button>
         </div>
       </div>
       <div ref={containerRef} className="flex-1" />
