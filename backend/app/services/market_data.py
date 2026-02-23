@@ -47,6 +47,7 @@ async def fetch_ticker(pair: str) -> dict:
         "high": data["highPrice"],
         "low": data["lowPrice"],
         "volume": data["volume"],
+        "quote_volume": data["quoteVolume"],
     }
 
 async def fetch_klines(pair: str, interval: str = "1m", limit: int = 500) -> list:
@@ -133,6 +134,7 @@ async def _stream_pair(
                                 "high": data["h"],
                                 "low": data["l"],
                                 "volume": data["v"],
+                                "quote_volume": data["q"],
                             }
                             await redis.set(
                                 f"market:{pair}:ticker",

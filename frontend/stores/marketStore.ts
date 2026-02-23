@@ -7,6 +7,7 @@ interface Ticker {
   high: string;
   low: string;
   volume: string;
+  quote_volume: string;
 }
 
 interface Trade {
