@@ -52,7 +52,7 @@ export function calcBOLL(
   for (let i = period - 1; i < data.length; i++) {
     const slice = data.slice(i - period + 1, i + 1).map((d) => d.close);
     const mean = slice.reduce((s, v) => s + v, 0) / period;
-    const variance = slice.reduce((s, v) => s + (v - mean) ** 2, 0) / period;
+    const variance = slice.reduce((s, v) => s + (v - mean) ** 2, 0) / (period - 1);
     const std = Math.sqrt(variance);
     result.push({
       time: data[i].time,
@@ -143,12 +143,13 @@ export function calcMACD(data: KlinePoint[]): {
     }
   }
 
+  const signalPeriod = 9;
   const signalRaw: { time: number; value: number }[] = [];
-  if (macdRaw.length >= 9) {
-    const k = 2 / 10;
-    let sigEma = macdRaw.slice(0, 9).reduce((s, d) => s + d.value, 0) / 9;
-    signalRaw.push({ time: macdRaw[8].time, value: sigEma });
-    for (let i = 9; i < macdRaw.length; i++) {
+  if (macdRaw.length >= signalPeriod) {
+    const k = 2 / (signalPeriod + 1);
+    let sigEma = macdRaw.slice(0, signalPeriod).reduce((s, d) => s + d.value, 0) / signalPeriod;
+    signalRaw.push({ time: macdRaw[signalPeriod - 1].time, value: sigEma });
+    for (let i = signalPeriod; i < macdRaw.length; i++) {
       sigEma = macdRaw[i].value * k + sigEma * (1 - k);
       signalRaw.push({ time: macdRaw[i].time, value: sigEma });
     }
@@ -187,7 +188,7 @@ export function calcRSI(
     v === 0 ? 100 : v === Infinity ? 0 : 100 - 100 / (1 + v);
   result.push({
     time: data[period].time,
-    value: rsi(avgGain / (avgLoss || 1e-10)),
+    value: rsi(avgLoss === 0 ? Infinity : avgGain / avgLoss),
   });
   for (let i = period + 1; i < data.length; i++) {
     const diff = data[i].close - data[i - 1].close;
@@ -195,7 +196,7 @@ export function calcRSI(
     avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period;
     result.push({
       time: data[i].time,
-      value: rsi(avgGain / (avgLoss || 1e-10)),
+      value: rsi(avgLoss === 0 ? Infinity : avgGain / avgLoss),
     });
   }
   return result;
@@ -341,6 +342,7 @@ export function calcCCI(
 export function calcOBV(
   data: KlinePoint[]
 ): { time: number; value: number }[] {
+  if (data.length === 0) return [];
   const result: { time: number; value: number }[] = [];
   let obv = 0;
   result.push({ time: data[0].time, value: 0 });
