@@ -1,0 +1,195 @@
+/* ── Outer wrapper ──────────────────────────────────────────── */
+.wrapper {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+}
+
+/* ── Side tabs: Buy / Sell ───────────────────────────────────── */
+.sideTabs {
+  display: flex;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sideTab {
+  flex: 1;
+  padding: 0.75rem 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+/* Active Buy tab */
+.sideTab[data-side="buy"][data-active="true"] {
+  background: rgba(14, 203, 129, 0.1);
+  color: var(--green);
+  border-bottom-color: var(--green);
+}
+
+/* Active Sell tab */
+.sideTab[data-side="sell"][data-active="true"] {
+  background: rgba(246, 70, 93, 0.1);
+  color: var(--red);
+  border-bottom-color: var(--red);
+}
+
+/* ── Order-type row: Limit / Market ─────────────────────────── */
+.typeTabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.75rem;
+  padding: 0.75rem 0.75rem 0;
+}
+
+.typeTab {
+  padding-bottom: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  transition: color 0.15s;
+  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+}
+
+.typeTabActive {
+  color: var(--text-primary);
+  border-bottom-color: var(--text-primary);
+}
+
+/* ── Form body ───────────────────────────────────────────────── */
+.formBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0.75rem;
+  gap: 0.75rem;
+  overflow-y: auto;
+}
+
+/* ── Available balance row ───────────────────────────────────── */
+.available {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.availableValue {
+  color: var(--text-primary);
+}
+
+/* ── Field wrapper ───────────────────────────────────────────── */
+.field {
+  display: flex;
+  flex-direction: column;
+}
+
+.label {
+  font-size: 0.75rem;
+  margin-bottom: 0.25rem;
+  color: var(--text-secondary);
+}
+
+.input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  outline: none;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.inputReadonly {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Slider section ──────────────────────────────────────────── */
+.sliderWrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.slider {
+  width: 100%;
+}
+
+/* Per-side accent colour applied via data attribute on the wrapper */
+.sliderWrapper[data-side="buy"] .slider {
+  accent-color: var(--green);
+}
+
+.sliderWrapper[data-side="sell"] .slider {
+  accent-color: var(--red);
+}
+
+.sliderLabels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+}
+
+.sliderPct {
+  font-size: 0.75rem;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+/* Active pct label colour per side */
+.sliderWrapper[data-side="buy"] .sliderPct[data-active="true"] {
+  color: var(--green);
+}
+
+.sliderWrapper[data-side="sell"] .sliderPct[data-active="true"] {
+  color: var(--red);
+}
+
+/* ── Submit button ───────────────────────────────────────────── */
+.submitBtn {
+  width: 100%;
+  padding: 0.625rem 0;
+  border-radius: 0.25rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: #fff;
+  margin-top: auto;
+  transition: opacity 0.15s;
+  cursor: pointer;
+}
+
+.submitBtn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.submitBtnBuy {
+  background: var(--green);
+}
+
+.submitBtnSell {
+  background: var(--red);
+}
+
+/* ── Feedback message ────────────────────────────────────────── */
+.msgOk {
+  font-size: 0.75rem;
+  text-align: center;
+  color: var(--green);
+}
+
+.msgErr {
+  font-size: 0.75rem;
+  text-align: center;
+  color: var(--red);
+}
