@@ -1,7 +1,7 @@
 from datetime import datetime, date
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.database import get_db
@@ -12,7 +12,7 @@ from app.models.order import Order
 
 
 class SubscribeRequest(BaseModel):
-    allocated_usdt: float = 100.0
+    allocated_usdt: float = Field(default=100.0, gt=0)
 
 
 router = APIRouter(prefix="/api/bots", tags=["bots"])
@@ -136,12 +136,10 @@ async def bot_trades(
 @router.post("/{bot_id}/subscribe")
 async def subscribe_bot(
     bot_id: int,
-    body: SubscribeRequest = None,
+    body: SubscribeRequest = SubscribeRequest(),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if body is None:
-        body = SubscribeRequest()
     bot = await db.get(Bot, bot_id)
     if not bot or bot.status != BotStatus.active:
         raise HTTPException(404, "Bot not found")
