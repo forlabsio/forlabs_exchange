@@ -58,6 +58,17 @@ async def fetch_klines(pair: str, interval: str = "1m", limit: int = 500) -> lis
             params={"symbol": symbol, "interval": interval, "limit": limit},
         )
         data = r.json()
+
+    # Check if response is an error
+    if isinstance(data, dict) and "code" in data:
+        print(f"[ERROR] Binance API error: {data}")
+        return []
+
+    # Validate data format
+    if not isinstance(data, list) or not data:
+        print(f"[ERROR] Unexpected klines response: {data}")
+        return []
+
     return [
         {
             "time": int(k[0]) // 1000,
@@ -68,6 +79,7 @@ async def fetch_klines(pair: str, interval: str = "1m", limit: int = 500) -> lis
             "volume": float(k[5]),
         }
         for k in data
+        if isinstance(k, list) and len(k) >= 6
     ]
 
 async def sync_market_to_redis(pair: str):
