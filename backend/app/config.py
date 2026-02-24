@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
@@ -10,10 +11,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     BINANCE_BASE_URL: str = "https://api.binance.com"
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Convert postgresql:// to postgresql+asyncpg:// for async support
-        if self.DATABASE_URL.startswith("postgresql://"):
-            self.DATABASE_URL = self.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+    @field_validator('DATABASE_URL', mode='before')
+    @classmethod
+    def convert_database_url(cls, v):
+        """Convert postgresql:// to postgresql+asyncpg:// for async support"""
+        if isinstance(v, str) and v.startswith("postgresql://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
 settings = Settings()
