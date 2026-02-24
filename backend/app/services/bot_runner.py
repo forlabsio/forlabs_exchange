@@ -113,23 +113,55 @@ async def run_bot(bot: Bot):
             from sqlalchemy import select as sel
 
             base, quote = pair.split("_")
+            allocated = Decimal(str(sub.allocated_usdt or 100))
+
+            # Estimate how much USDT the bot has already deployed for this user
+            # by summing buy costs and subtracting sell proceeds from filled bot orders
+            bot_orders_result = await db.scalars(
+                sel(Order).where(
+                    Order.user_id == sub.user_id,
+                    Order.bot_id == bot.id,
+                    Order.status == "filled",
+                )
+            )
+            deployed = Decimal("0")
+            for o in bot_orders_result:
+                price_val = Decimal(str(o.price or 0))
+                qty_val = Decimal(str(o.filled_quantity or 0))
+                if o.side == "buy":
+                    deployed += qty_val * price_val
+                else:
+                    deployed -= qty_val * price_val
+
             redis = await get_redis()
+            ticker = await redis.get(f"market:{pair}:ticker")
+            if not ticker:
+                continue
+            price = Decimal(json.loads(ticker)["last_price"])
 
             if signal == "buy":
-                wallet = await db.scalar(sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == quote))
+                available = allocated - deployed
+                if available <= Decimal("0"):
+                    continue  # allocation fully deployed
+                wallet = await db.scalar(
+                    sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == quote)
+                )
                 if not wallet or wallet.balance <= 0:
                     continue
-                ticker = await redis.get(f"market:{pair}:ticker")
-                if not ticker:
-                    continue
-                price = Decimal(json.loads(ticker)["last_price"])
-                qty_usdt = wallet.balance * Decimal(str(trade_pct / 100))
-                quantity = (qty_usdt / price).quantize(Decimal("0.00001"))
-            else:
-                wallet = await db.scalar(sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == base))
+                spend = min(
+                    wallet.balance * Decimal(str(trade_pct / 100)),
+                    available,
+                )
+                quantity = (spend / price).quantize(Decimal("0.00001"))
+            else:  # sell
+                wallet = await db.scalar(
+                    sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == base)
+                )
                 if not wallet or wallet.balance <= 0:
                     continue
-                quantity = (wallet.balance * Decimal(str(trade_pct / 100))).quantize(Decimal("0.00001"))
+                quantity = (wallet.balance * Decimal(str(trade_pct / 100))).quantize(
+                    Decimal("0.00001")
+                )
 
             if quantity <= 0:
                 continue
