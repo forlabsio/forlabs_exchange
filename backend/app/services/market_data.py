@@ -36,6 +36,7 @@ async def fetch_ticker(pair: str) -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            print(f"[CoinGecko] Fetching ticker for {pair} ({coin_id})")
             r = await client.get(
                 f"{COINGECKO_BASE}/coins/{coin_id}",
                 params={
@@ -46,7 +47,9 @@ async def fetch_ticker(pair: str) -> dict:
                     "developer_data": "false",
                 },
             )
+            print(f"[CoinGecko] Response status: {r.status_code}")
             data = r.json()
+            print(f"[CoinGecko] Got data for {pair}")
 
         market_data = data.get("market_data", {})
         current_price = market_data.get("current_price", {}).get("usd", 0)
