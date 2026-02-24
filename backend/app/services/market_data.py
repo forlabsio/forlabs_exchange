@@ -60,12 +60,12 @@ async def fetch_klines(pair: str, interval: str = "1m", limit: int = 500) -> lis
         data = r.json()
     return [
         {
-            "time": k[0] // 1000,
-            "open": k[1],
-            "high": k[2],
-            "low": k[3],
-            "close": k[4],
-            "volume": k[5],
+            "time": int(k[0]) // 1000,
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+            "volume": float(k[5]),
         }
         for k in data
     ]
