@@ -1,6 +1,6 @@
 "use client";
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import Link from "next/link";
 import { usePairListStore } from "@/stores/pairListStore";
 
 function formatPrice(price: string): string {
@@ -21,13 +21,20 @@ function formatChange(change: string): { text: string; positive: boolean } {
 }
 
 export default function PairList({ currentPair }: { currentPair: string }) {
-  const router = useRouter();
-  const { getFilteredPairs, searchQuery, setSearchQuery, fetchPairs, loading, allPairs } =
+  const { getFilteredPairs, searchQuery, setSearchQuery, fetchPairs, loading, allPairs, error, scrollTop, setScrollTop } =
     usePairListStore();
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchPairs();
   }, [fetchPairs]);
+
+  // Restore scroll position after mount / re-mount
+  useLayoutEffect(() => {
+    if (listRef.current && scrollTop > 0) {
+      listRef.current.scrollTop = scrollTop;
+    }
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const pairs = getFilteredPairs();
 
@@ -35,7 +42,7 @@ export default function PairList({ currentPair }: { currentPair: string }) {
     <div className="h-full flex flex-col overflow-hidden">
       {/* Search input */}
       <div
-        className="px-3 py-2 sticky top-0 z-10 border-b"
+        className="px-3 py-2 flex-shrink-0 border-b"
         style={{
           background: "var(--bg-secondary)",
           borderColor: "var(--border)",
@@ -57,7 +64,7 @@ export default function PairList({ currentPair }: { currentPair: string }) {
 
       {/* Column headers */}
       <div
-        className="grid grid-cols-3 px-3 py-1.5 text-xs sticky top-[41px] z-10 border-b"
+        className="grid grid-cols-3 px-3 py-1.5 text-xs flex-shrink-0 border-b"
         style={{
           background: "var(--bg-secondary)",
           color: "var(--text-secondary)",
@@ -70,46 +77,64 @@ export default function PairList({ currentPair }: { currentPair: string }) {
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto">
+      <div
+        ref={listRef}
+        className="flex-1 overflow-y-auto"
+        onScroll={(e) => setScrollTop((e.currentTarget as HTMLDivElement).scrollTop)}
+      >
         {loading && allPairs.length === 0 ? (
           <div
-            className="flex items-center justify-center h-full text-xs"
+            className="flex items-center justify-center py-8 text-xs"
             style={{ color: "var(--text-secondary)" }}
           >
             Loading...
           </div>
+        ) : error && allPairs.length === 0 ? (
+          <div
+            className="flex flex-col items-center justify-center py-8 text-xs gap-2"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            <span>Failed to load</span>
+            <button
+              type="button"
+              onClick={() => fetchPairs()}
+              className="px-2 py-1 rounded text-xs bg-[var(--bg-panel)] text-[var(--blue)] border border-[var(--border)]"
+            >
+              Retry
+            </button>
+          </div>
         ) : (
-          pairs.map((ticker) => {
-            const isActive = ticker.symbol === currentPair;
-            const [base] = ticker.displaySymbol.split("/");
-            const { text: changeText, positive } = formatChange(ticker.priceChangePercent);
+          pairs.map((item) => {
+            const isActive = item.symbol === currentPair;
+            const [base] = item.displaySymbol.split("/");
+            const { text: changeText, positive } = formatChange(item.priceChangePercent);
 
             return (
-              <div
-                key={ticker.symbol}
-                onClick={() => router.push(`/exchange/${ticker.symbol}`)}
-                className="grid grid-cols-3 px-3 py-1.5 text-xs cursor-pointer transition-colors"
+              <Link
+                key={item.symbol}
+                href={`/exchange/${item.symbol}`}
+                scroll={false}
+                className="grid grid-cols-3 px-3 py-1.5 text-xs no-underline transition-colors"
                 style={{
+                  display: "grid",
                   background: isActive ? "var(--bg-panel)" : "transparent",
-                  color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
+                  color: "var(--text-secondary)",
+                  textDecoration: "none",
                 }}
                 onMouseEnter={(e) => {
                   if (!isActive) {
-                    (e.currentTarget as HTMLDivElement).style.background = "var(--bg-panel)";
+                    (e.currentTarget as HTMLAnchorElement).style.background = "var(--bg-panel)";
                   }
                 }}
                 onMouseLeave={(e) => {
                   if (!isActive) {
-                    (e.currentTarget as HTMLDivElement).style.background = "transparent";
+                    (e.currentTarget as HTMLAnchorElement).style.background = "transparent";
                   }
                 }}
               >
                 {/* Pair column */}
                 <span>
-                  <span
-                    className="font-bold"
-                    style={{ color: isActive ? "var(--text-primary)" : "var(--text-primary)" }}
-                  >
+                  <span className="font-bold" style={{ color: "var(--text-primary)" }}>
                     {base}
                   </span>
                   <span style={{ color: "var(--text-secondary)" }}>/USDT</span>
@@ -117,7 +142,7 @@ export default function PairList({ currentPair }: { currentPair: string }) {
 
                 {/* Price column */}
                 <span className="text-right" style={{ color: "var(--text-primary)" }}>
-                  {formatPrice(ticker.lastPrice)}
+                  {formatPrice(item.lastPrice)}
                 </span>
 
                 {/* Change column */}
@@ -127,7 +152,7 @@ export default function PairList({ currentPair }: { currentPair: string }) {
                 >
                   {changeText}
                 </span>
-              </div>
+              </Link>
             );
           })
         )}

@@ -20,6 +20,8 @@ export interface Bot {
   performance: BotPerformance;
   is_subscribed: boolean;
   subscribed_at?: string;
+  allocated_usdt?: number;
+  pnl_usdt?: number;
 }
 
 export interface BotTrade {
@@ -42,7 +44,7 @@ interface BotStore {
   fetchMyBots: () => Promise<void>;
   fetchBotTrades: (botId: number) => Promise<void>;
   subscribe: (botId: number, allocatedUsdt?: number) => Promise<void>;
-  unsubscribe: (botId: number) => Promise<void>;
+  unsubscribe: (botId: number, settle?: boolean) => Promise<void>;
 }
 
 export const useBotStore = create<BotStore>((set) => ({
@@ -67,7 +69,7 @@ export const useBotStore = create<BotStore>((set) => ({
       body: JSON.stringify({ allocated_usdt: allocatedUsdt }),
     });
   },
-  unsubscribe: async (botId) => {
-    await apiFetch(`/api/bots/${botId}/subscribe`, { method: "DELETE" });
+  unsubscribe: async (botId, settle = false) => {
+    await apiFetch(`/api/bots/${botId}/subscribe?settle=${settle}`, { method: "DELETE" });
   },
 }));

@@ -12,8 +12,13 @@
   --blue: #1668dc;
 }
 
+* {
+  box-sizing: border-box;
+}
+
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', -apple-system, sans-serif;
+  margin: 0;
 }

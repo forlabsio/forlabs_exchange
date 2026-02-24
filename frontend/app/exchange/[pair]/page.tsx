@@ -1,6 +1,6 @@
 "use client";
 import { useEffect } from "react";
-import { use } from "react";
+import { useParams } from "next/navigation";
 import { useMarketStore } from "@/stores/marketStore";
 import PairList from "@/components/exchange/PairList";
 import Orderbook from "@/components/exchange/Orderbook";
@@ -19,8 +19,9 @@ function formatTurnover(value: number): string {
   return value.toLocaleString();
 }
 
-export default function ExchangePage({ params }: { params: Promise<{ pair: string }> }) {
-  const { pair } = use(params);
+export default function ExchangePage() {
+  const params = useParams();
+  const pair = (params.pair as string) ?? "BTC_USDT";
   const { connect, disconnect, ticker } = useMarketStore();
 
   useEffect(() => {

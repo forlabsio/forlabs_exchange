@@ -27,6 +27,7 @@ interface MarketStore {
 }
 
 let ws: WebSocket | null = null;
+let lastOrderbookMs = 0; // throttle orderbook renders to max ~5/sec
 
 export const useMarketStore = create<MarketStore>((set) => ({
   ticker: null,
@@ -37,29 +38,40 @@ export const useMarketStore = create<MarketStore>((set) => ({
   connect: (pair: string) => {
     if (ws) ws.close();
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
-    ws = new WebSocket(`${wsUrl}/ws/market/${pair}`);
+    const newWs = new WebSocket(`${wsUrl}/ws/market/${pair}`);
+    ws = newWs;
 
-    ws.onopen = () => set({ connected: true });
-    ws.onclose = () => set({ connected: false });
-    ws.onerror = () => set({ connected: false });
-    ws.onmessage = (e) => {
+    // Guard all handlers so stale WS events don't corrupt state after reconnect
+    newWs.onopen = () => {
+      if (ws === newWs) set({ connected: true });
+    };
+    newWs.onclose = () => {
+      if (ws === newWs) set({ connected: false });
+    };
+    newWs.onerror = () => {
+      if (ws === newWs) set({ connected: false });
+    };
+    newWs.onmessage = (e) => {
+      if (ws !== newWs) return; // ignore messages from replaced connections
       try {
         const data = JSON.parse(e.data);
         if (data.type === "snapshot") {
-          // Initial full snapshot on connect
+          lastOrderbookMs = Date.now();
           set({
             ticker: data.ticker && data.ticker.last_price ? data.ticker : null,
             orderbook: data.orderbook || { bids: [], asks: [] },
             trades: data.trades || [],
           });
         } else if (data.type === "ticker" && data.ticker?.last_price) {
-          // Real-time ticker push from Binance miniTicker stream
           set({ ticker: data.ticker });
         } else if (data.type === "orderbook" && data.orderbook) {
-          // Real-time orderbook push from Binance depth20 stream (~100ms)
-          set({ orderbook: data.orderbook });
+          // Throttle orderbook updates to max 5/sec (200ms) to reduce re-renders
+          const now = Date.now();
+          if (now - lastOrderbookMs >= 200) {
+            lastOrderbookMs = now;
+            set({ orderbook: data.orderbook });
+          }
         } else if (data.type === "trade" && data.trade) {
-          // Real-time individual trade push
           set((state) => ({
             trades: [data.trade, ...state.trades].slice(0, 50),
           }));

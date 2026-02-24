@@ -16,8 +16,10 @@ interface PairListStore {
   searchQuery: string;
   loading: boolean;
   error: string | null;
+  scrollTop: number;
   fetchPairs: () => Promise<void>;
   setSearchQuery: (q: string) => void;
+  setScrollTop: (top: number) => void;
   getFilteredPairs: () => BinanceTicker[];
 }
 
@@ -26,6 +28,7 @@ export const usePairListStore = create<PairListStore>((set, get) => ({
   searchQuery: "",
   loading: false,
   error: null,
+  scrollTop: 0,
 
   fetchPairs: async () => {
     set({ loading: true, error: null });
@@ -73,9 +76,13 @@ export const usePairListStore = create<PairListStore>((set, get) => ({
     set({ searchQuery: q });
   },
 
+  setScrollTop: (top: number) => {
+    set({ scrollTop: top });
+  },
+
   getFilteredPairs: () => {
     const { allPairs, searchQuery } = get();
-    if (!searchQuery) return allPairs;
+    if (!searchQuery) return allPairs.slice(0, 100); // Show top 100 by volume for performance
     const query = searchQuery.toLowerCase();
     return allPairs.filter(
       (pair) =>

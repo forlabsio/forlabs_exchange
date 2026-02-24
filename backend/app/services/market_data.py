@@ -101,7 +101,7 @@ async def _stream_pair(
       2. Call broadcast_cb to push to connected browser clients
     """
     sym = PAIR_MAP.get(pair, pair.lower().replace("_", ""))
-    stream = f"{sym}@miniTicker/{sym}@depth20@100ms/{sym}@trade"
+    stream = f"{sym}@ticker/{sym}@depth20@100ms/{sym}@trade"
     url = f"{BINANCE_WS_BASE}/stream?streams={stream}"
 
     redis = await get_redis()
@@ -126,7 +126,7 @@ async def _stream_pair(
                         data = envelope.get("data", {})
                         stream_name = envelope.get("stream", "")
 
-                        if "@miniTicker" in stream_name:
+                        if "@ticker" in stream_name and "@depth" not in stream_name:
                             ticker_cache = {
                                 "pair": pair,
                                 "last_price": data["c"],

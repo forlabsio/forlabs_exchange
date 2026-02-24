@@ -1,14 +1,18 @@
+import json
 from datetime import datetime, date
+from decimal import Decimal
+from statistics import mean, stdev as statistics_stdev
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.database import get_db
 from app.core.deps import get_current_user, get_optional_user
+from app.core.redis import get_redis
 from app.models.user import User
 from app.models.bot import Bot, BotSubscription, BotStatus, BotPerformance
-from app.models.order import Order
+from app.models.order import Order, Trade, OrderSide, OrderType
 
 
 class SubscribeRequest(BaseModel):
@@ -26,6 +30,92 @@ def _perf_dict(perf) -> dict:
         "monthly_return_pct": float(perf.monthly_return_pct) if perf.monthly_return_pct is not None else 0.0,
         "max_drawdown_pct": float(perf.max_drawdown_pct) if perf.max_drawdown_pct is not None else 0.0,
         "sharpe_ratio": float(perf.sharpe_ratio) if perf.sharpe_ratio is not None else 0.0,
+    }
+
+
+async def _calc_live_stats(db: AsyncSession, user_id: int, bot_id: int, allocated: Decimal, pair: str) -> dict:
+    """Calculate real-time P&L, win rate, MDD, sharpe from actual filled orders."""
+    orders = list(await db.scalars(
+        select(Order).where(
+            Order.user_id == user_id,
+            Order.bot_id == bot_id,
+            Order.status == "filled",
+        ).order_by(Order.created_at)
+    ))
+
+    buy_cost = Decimal("0")
+    sell_proceeds = Decimal("0")
+    buy_qty_total = Decimal("0")
+    net_qty = Decimal("0")
+    running_usdt = allocated
+    running_base = Decimal("0")
+    wins = 0
+    total_sells = 0
+    trade_returns: list = []
+    portfolio_history: list = []
+
+    for o in orders:
+        trade = await db.scalar(select(Trade).where(Trade.order_id == o.id))
+        fill_price = Decimal(str(trade.price)) if trade else Decimal(str(o.price or 0))
+        if fill_price == 0:
+            continue
+        qty = Decimal(str(o.filled_quantity or 0))
+
+        if o.side == "buy":
+            buy_cost += qty * fill_price
+            buy_qty_total += qty
+            net_qty += qty
+            running_usdt -= qty * fill_price
+            running_base += qty
+        else:
+            avg_cost = buy_cost / buy_qty_total if buy_qty_total > 0 else Decimal("0")
+            sell_proceeds += qty * fill_price
+            net_qty -= qty
+            running_usdt += qty * fill_price
+            running_base = max(running_base - qty, Decimal("0"))
+            total_sells += 1
+            if fill_price > avg_cost:
+                wins += 1
+            if avg_cost > 0:
+                trade_returns.append(float((fill_price - avg_cost) / avg_cost * 100))
+
+        portfolio_history.append(float(running_usdt + running_base * fill_price))
+
+    net_qty = max(net_qty, Decimal("0"))
+
+    redis = await get_redis()
+    ticker = await redis.get(f"market:{pair}:ticker")
+    current_price = Decimal(json.loads(ticker)["last_price"]) if ticker else Decimal("0")
+
+    unrealized = net_qty * current_price
+    pnl = sell_proceeds + unrealized - buy_cost
+    pnl_pct = float(pnl / allocated * 100) if allocated > 0 else 0.0
+    win_rate = float(wins / total_sells * 100) if total_sells > 0 else 0.0
+
+    max_dd = 0.0
+    if portfolio_history:
+        peak = portfolio_history[0]
+        for val in portfolio_history:
+            if val > peak:
+                peak = val
+            if peak > 0:
+                dd = (peak - val) / peak * 100
+                if dd > max_dd:
+                    max_dd = dd
+
+    sharpe = 0.0
+    if len(trade_returns) >= 2:
+        avg_r = mean(trade_returns)
+        std_r = statistics_stdev(trade_returns)
+        sharpe = avg_r / std_r if std_r > 0 else 0.0
+
+    return {
+        "pnl_usdt": float(pnl),
+        "pnl_pct": pnl_pct,
+        "win_rate": win_rate,
+        "max_drawdown_pct": max_dd,
+        "sharpe_ratio": sharpe,
+        "trade_count": len(orders),
     }
 
 
@@ -101,8 +191,63 @@ async def my_bots(
         d = await _bot_dict(db, bot, user)
         d["subscribed_at"] = sub.started_at.isoformat() if sub.started_at else None
         d["allocated_usdt"] = float(sub.allocated_usdt) if sub.allocated_usdt is not None else 100.0
+        config = bot.strategy_config or {}
+        pair = config.get("pair", "BTC_USDT")
+        allocated = Decimal(str(sub.allocated_usdt or 100))
+        live = await _calc_live_stats(db, user.id, bot.id, allocated, pair)
+        d["pnl_usdt"] = live["pnl_usdt"]
+        d["performance"]["monthly_return_pct"] = live["pnl_pct"]
+        if live["trade_count"] > 0:
+            d["performance"]["win_rate"] = live["win_rate"]
+            d["performance"]["max_drawdown_pct"] = live["max_drawdown_pct"]
+            if live["sharpe_ratio"] != 0.0:
+                d["performance"]["sharpe_ratio"] = live["sharpe_ratio"]
         result.append(d)
     return result
+
+
+@router.get("/{bot_id}/position")
+async def bot_position(
+    bot_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    bot = await db.get(Bot, bot_id)
+    if not bot:
+        raise HTTPException(404, "Bot not found")
+    config = bot.strategy_config or {}
+    pair = config.get("pair", "BTC_USDT")
+    base = pair.split("_")[0]
+
+    orders = await db.scalars(
+        select(Order).where(
+            Order.user_id == user.id,
+            Order.bot_id == bot_id,
+            Order.status == "filled",
+        )
+    )
+    net_qty = Decimal("0")
+    for o in orders:
+        qty = Decimal(str(o.filled_quantity or 0))
+        if o.side == "buy":
+            net_qty += qty
+        else:
+            net_qty -= qty
+    net_qty = max(net_qty, Decimal("0"))
+
+    redis = await get_redis()
+    price_usdt = 0.0
+    ticker = await redis.get(f"market:{pair}:ticker")
+    if ticker:
+        price_usdt = float(json.loads(ticker)["last_price"])
+
+    return {
+        "pair": pair,
+        "base": base,
+        "net_qty": float(net_qty),
+        "price_usdt": price_usdt,
+        "value_usdt": float(net_qty) * price_usdt,
+    }
 
 
 @router.get("/{bot_id}/trades")
@@ -111,26 +256,28 @@ async def bot_trades(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    orders = await db.scalars(
+    orders = list(await db.scalars(
         select(Order).where(
             Order.bot_id == bot_id,
             Order.user_id == user.id,
         ).order_by(Order.created_at.desc()).limit(50)
-    )
-    return [
-        {
+    ))
+    result = []
+    for o in orders:
+        trade = await db.scalar(select(Trade).where(Trade.order_id == o.id))
+        fill_price = float(trade.price) if trade else (float(o.price) if o.price else None)
+        result.append({
             "id": o.id,
             "pair": o.pair,
             "side": o.side,
             "type": o.type,
             "quantity": float(o.quantity),
-            "price": float(o.price) if o.price else None,
+            "price": fill_price,
             "filled_quantity": float(o.filled_quantity) if o.filled_quantity else 0.0,
             "status": o.status,
             "created_at": o.created_at.isoformat() if o.created_at else None,
-        }
-        for o in orders
-    ]
+        })
+    return result
 
 
 @router.post("/{bot_id}/subscribe")
@@ -160,6 +307,7 @@ async def subscribe_bot(
 @router.delete("/{bot_id}/subscribe")
 async def unsubscribe_bot(
     bot_id: int,
+    settle: bool = Query(default=False),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -172,6 +320,45 @@ async def unsubscribe_bot(
     )
     if not sub:
         raise HTTPException(404, "Subscription not found")
+
+    if settle:
+        bot = await db.get(Bot, bot_id)
+        config = (bot.strategy_config or {}) if bot else {}
+        pair = config.get("pair", "BTC_USDT")
+
+        orders = await db.scalars(
+            select(Order).where(
+                Order.user_id == user.id,
+                Order.bot_id == bot_id,
+                Order.status == "filled",
+            )
+        )
+        net_qty = Decimal("0")
+        for o in orders:
+            qty = Decimal(str(o.filled_quantity or 0))
+            if o.side == "buy":
+                net_qty += qty
+            else:
+                net_qty -= qty
+        net_qty = max(net_qty, Decimal("0")).quantize(Decimal("0.00001"))
+
+        if net_qty > 0:
+            from app.services.matching_engine import try_fill_order
+            sell_order = Order(
+                user_id=user.id,
+                pair=pair,
+                side=OrderSide.sell,
+                type=OrderType.market,
+                quantity=net_qty,
+                is_bot_order=True,
+                bot_id=bot_id,
+            )
+            db.add(sell_order)
+            await db.flush()
+            await try_fill_order(db, sell_order)
+            # try_fill_order commits the transaction; start fresh for sub update
+            await db.refresh(sub)
+
     sub.is_active = False
     sub.ended_at = datetime.utcnow()
     await db.commit()

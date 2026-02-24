@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
+from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.wallet import Wallet
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse
@@ -27,3 +28,12 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
     return TokenResponse(access_token=create_access_token(user.id))
+
+@router.get("/me")
+async def me(user: User = Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "email": user.email,
+        "role": user.role,
+        "is_subscribed": user.is_subscribed,
+    }

@@ -1,0 +1,37 @@
+.toolbar {
+  border-color: var(--border);
+  background: var(--bg-secondary);
+}
+
+.intervalBtn[data-active="true"] {
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  font-weight: 600;
+}
+
+.intervalBtn[data-active="false"] {
+  color: var(--text-secondary);
+  background: transparent;
+  font-weight: 400;
+}
+
+.separator {
+  border-left: 1px solid var(--border);
+  height: 12px;
+  display: inline-block;
+  margin: 0 6px;
+}
+
+.indicatorBtn[data-active="true"] {
+  color: var(--text-primary);
+  background: var(--bg-panel);
+}
+
+.indicatorBtn[data-active="false"] {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.iconBtn {
+  color: var(--text-secondary);
+}
