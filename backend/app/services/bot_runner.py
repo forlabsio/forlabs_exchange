@@ -2,31 +2,85 @@ import asyncio
 import json
 import time
 from decimal import Decimal
+from typing import Optional
 from sqlalchemy import select
 from app.database import AsyncSessionLocal
 from app.models.bot import Bot, BotSubscription, BotStatus
 from app.models.order import Order, OrderSide, OrderType
 from app.core.redis import get_redis
 from app.services.matching_engine import try_fill_order
+from app.services.indicators import calc_rsi, calc_ma, calc_bollinger
+from app.services.market_data import fetch_klines
 
-async def generate_signal(bot: Bot, pair: str):
+async def generate_signal(bot: Bot, pair: str) -> Optional[str]:
     redis = await get_redis()
     config = bot.strategy_config or {}
     interval = config.get("signal_interval", 300)
 
     last_trade_key = f"bot:{bot.id}:last_trade_time"
     last_trade = await redis.get(last_trade_key)
-
     now = int(time.time())
     if last_trade and now - int(last_trade) < interval:
         return None
 
-    last_side_key = f"bot:{bot.id}:last_side"
-    last_side = await redis.get(last_side_key)
-    signal = "sell" if last_side == "buy" else "buy"
+    strategy = bot.strategy_type or "alternating"
+    signal: Optional[str] = None
 
-    await redis.set(last_trade_key, now)
-    await redis.set(last_side_key, signal)
+    if strategy == "alternating":
+        last_side_key = f"bot:{bot.id}:last_side"
+        last_side = await redis.get(last_side_key)
+        signal = "sell" if last_side == "buy" else "buy"
+        await redis.set(last_side_key, signal)
+
+    elif strategy == "rsi":
+        period = int(config.get("rsi_period", 14))
+        oversold = float(config.get("oversold", 30))
+        overbought = float(config.get("overbought", 70))
+        try:
+            klines = await fetch_klines(pair, "1h", period + 5)
+            closes = [float(k["close"]) for k in klines]
+            rsi = calc_rsi(closes, period)
+            if rsi < oversold:
+                signal = "buy"
+            elif rsi > overbought:
+                signal = "sell"
+        except Exception as e:
+            print(f"RSI signal error bot {bot.id}: {e}")
+
+    elif strategy == "ma_cross":
+        fast = int(config.get("fast_period", 5))
+        slow = int(config.get("slow_period", 20))
+        try:
+            klines = await fetch_klines(pair, "1h", slow + 5)
+            closes = [float(k["close"]) for k in klines]
+            fast_ma = calc_ma(closes, fast)
+            slow_ma = calc_ma(closes, slow)
+            prev_fast = calc_ma(closes[:-1], fast)
+            prev_slow = calc_ma(closes[:-1], slow)
+            if prev_fast <= prev_slow and fast_ma > slow_ma:
+                signal = "buy"   # golden cross
+            elif prev_fast >= prev_slow and fast_ma < slow_ma:
+                signal = "sell"  # death cross
+        except Exception as e:
+            print(f"MA cross signal error bot {bot.id}: {e}")
+
+    elif strategy == "boll":
+        period = int(config.get("period", 20))
+        std_dev = float(config.get("deviation", 2.0))
+        try:
+            klines = await fetch_klines(pair, "1h", period + 5)
+            closes = [float(k["close"]) for k in klines]
+            lower, upper = calc_bollinger(closes, period, std_dev)
+            current = closes[-1]
+            if current <= lower:
+                signal = "buy"
+            elif current >= upper:
+                signal = "sell"
+        except Exception as e:
+            print(f"Bollinger signal error bot {bot.id}: {e}")
+
+    if signal:
+        await redis.set(last_trade_key, now)
     return signal
 
 async def run_bot(bot: Bot):
