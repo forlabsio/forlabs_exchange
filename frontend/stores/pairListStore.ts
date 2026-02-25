@@ -16,8 +16,8 @@ export interface BinanceTicker {
 export const PAIR_GROUPS: Array<{ group: string; pairs: string[] }> = [
   { group: "Market Anchor",         pairs: ["BTC", "ETH"] },
   { group: "High Liquidity Majors", pairs: ["SOL", "XRP", "BNB", "AVAX", "ADA", "DOGE", "DOT", "LINK"] },
-  { group: "L2 / Scaling",          pairs: ["ARB", "OP", "MATIC"] },
-  { group: "AI / Infra",            pairs: ["RNDR", "FET", "GRT"] },
+  { group: "L2 / Scaling",          pairs: ["ARB", "OP", "POL"] },
+  { group: "AI / Infra",            pairs: ["RENDER", "FET", "GRT"] },
   { group: "DeFi / Ecosystem",      pairs: ["UNI", "AAVE"] },
   { group: "High Beta / Rotation",  pairs: ["SUI", "APT"] },
 ];

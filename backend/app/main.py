@@ -11,7 +11,21 @@ from app.services.market_data import market_data_loop
 from app.services.bot_runner import bot_runner_loop
 from app.services.bot_eviction import daily_drawdown_check, monthly_evaluation, daily_performance_update
 
-SUPPORTED_PAIRS = ["BTC_USDT", "ETH_USDT", "BNB_USDT", "SOL_USDT"]
+SUPPORTED_PAIRS = [
+    # Market Anchor
+    "BTC_USDT", "ETH_USDT",
+    # High Liquidity Majors
+    "SOL_USDT", "XRP_USDT", "BNB_USDT", "AVAX_USDT", "ADA_USDT",
+    "DOGE_USDT", "DOT_USDT", "LINK_USDT",
+    # L2 / Scaling
+    "ARB_USDT", "OP_USDT", "POL_USDT",
+    # AI / Infra
+    "RENDER_USDT", "FET_USDT", "GRT_USDT",
+    # DeFi / Ecosystem
+    "UNI_USDT", "AAVE_USDT",
+    # High Beta / Rotation
+    "SUI_USDT", "APT_USDT",
+]
 scheduler = AsyncIOScheduler()
 
 @asynccontextmanager
