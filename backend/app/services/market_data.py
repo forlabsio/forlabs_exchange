@@ -123,7 +123,10 @@ async def _ws_pair(pair: str, broadcast_cb: BroadcastCb):
     import websockets  # type: ignore
 
     symbol = _pair_to_symbol(pair).lower()
-    url = f"{BINANCE_WS}/{symbol}@ticker/{symbol}@depth20@100ms/{symbol}@trade"
+    # Combined stream URL: wss://stream.binance.com:9443/stream?streams=s1/s2/s3
+    # Each message is wrapped: {"stream": "...", "data": {...}}
+    streams = f"{symbol}@ticker/{symbol}@depth20@100ms/{symbol}@trade"
+    url = f"wss://stream.binance.com:9443/stream?streams={streams}"
     redis = await get_redis()
 
     while True:
@@ -161,18 +164,21 @@ async def _ws_pair(pair: str, broadcast_cb: BroadcastCb):
 
                     elif "@trade" in stream:
                         d = msg["data"]
-                        # Keep a rolling list of last 50 trades in Redis
+                        trade = {
+                            "price": d["p"],
+                            "qty": d["q"],
+                            "is_buyer_maker": d["m"],   # True = seller is market maker (sell)
+                            "time": d["T"],
+                        }
+                        # Rolling list in Redis (for snapshot on new connections)
                         trades_key = f"market:{pair}:trades"
                         existing_raw = await redis.get(trades_key)
                         trades = json.loads(existing_raw) if existing_raw else []
-                        trades.append({
-                            "price": d["p"],
-                            "qty": d["q"],
-                            "side": "buy" if not d["m"] else "sell",
-                            "time": d["T"],
-                        })
+                        trades.append(trade)
                         trades = trades[-50:]
                         await redis.set(trades_key, json.dumps(trades), ex=60)
+                        # Push to connected clients
+                        await broadcast_cb(pair, {"type": "trade", "trade": trade})
 
         except Exception as e:
             print(f"[Binance WS] {pair} error: {e} — reconnecting in 5s")
