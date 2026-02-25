@@ -15,6 +15,7 @@ from app.services.stats import calc_bot_stats
 
 class SubscribeRequest(BaseModel):
     allocated_usdt: float = Field(default=100.0, gt=0)
+    tx_hash: str
 
 
 router = APIRouter(prefix="/api/bots", tags=["bots"])
@@ -200,7 +201,7 @@ async def bot_trades(
 @router.post("/{bot_id}/subscribe")
 async def subscribe_bot(
     bot_id: int,
-    body: SubscribeRequest = SubscribeRequest(),
+    body: SubscribeRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -216,9 +217,51 @@ async def subscribe_bot(
     )
     if existing:
         raise HTTPException(400, "Already subscribed")
-    db.add(BotSubscription(user_id=user.id, bot_id=bot_id, allocated_usdt=body.allocated_usdt))
+
+    from app.services.payment_verifier import verify_polygon_usdt_payment
+    from app.models.payment import PaymentHistory
+    from app.config import settings
+
+    existing_payment = await db.scalar(
+        select(PaymentHistory).where(PaymentHistory.tx_hash == body.tx_hash)
+    )
+    if existing_payment:
+        raise HTTPException(400, "Transaction already used")
+
+    monthly_fee = float(bot.monthly_fee) if bot.monthly_fee else 0
+    if monthly_fee > 0:
+        result = await verify_polygon_usdt_payment(
+            tx_hash=body.tx_hash,
+            expected_to=settings.ADMIN_WALLET_ADDRESS,
+            expected_amount=monthly_fee,
+        )
+        if not result["verified"]:
+            raise HTTPException(400, f"Payment verification failed: {result.get('error', 'unknown')}")
+
+    from datetime import timedelta
+    expires_at = datetime.utcnow() + timedelta(days=30)
+
+    sub = BotSubscription(
+        user_id=user.id,
+        bot_id=bot_id,
+        allocated_usdt=body.allocated_usdt,
+        tx_hash=body.tx_hash,
+        payment_amount=monthly_fee,
+        expires_at=expires_at,
+    )
+    db.add(sub)
+
+    if monthly_fee > 0:
+        db.add(PaymentHistory(
+            user_id=user.id,
+            bot_id=bot_id,
+            tx_hash=body.tx_hash,
+            amount=monthly_fee,
+            network="polygon",
+        ))
+
     await db.commit()
-    return {"message": "subscribed"}
+    return {"message": "subscribed", "expires_at": expires_at.isoformat()}
 
 
 @router.delete("/{bot_id}/subscribe")
@@ -280,3 +323,63 @@ async def unsubscribe_bot(
     sub.ended_at = datetime.utcnow()
     await db.commit()
     return {"message": "unsubscribed"}
+
+
+@router.post("/{bot_id}/renew")
+async def renew_subscription(
+    bot_id: int,
+    body: SubscribeRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    sub = await db.scalar(
+        select(BotSubscription).where(
+            BotSubscription.user_id == user.id,
+            BotSubscription.bot_id == bot_id,
+        ).order_by(BotSubscription.started_at.desc()).limit(1)
+    )
+    if not sub:
+        raise HTTPException(404, "No subscription found")
+
+    bot = await db.get(Bot, bot_id)
+    if not bot:
+        raise HTTPException(404, "Bot not found")
+
+    from app.services.payment_verifier import verify_polygon_usdt_payment
+    from app.models.payment import PaymentHistory
+    from app.config import settings
+
+    existing_payment = await db.scalar(
+        select(PaymentHistory).where(PaymentHistory.tx_hash == body.tx_hash)
+    )
+    if existing_payment:
+        raise HTTPException(400, "Transaction already used")
+
+    monthly_fee = float(bot.monthly_fee) if bot.monthly_fee else 0
+    if monthly_fee > 0:
+        result = await verify_polygon_usdt_payment(
+            tx_hash=body.tx_hash,
+            expected_to=settings.ADMIN_WALLET_ADDRESS,
+            expected_amount=monthly_fee,
+        )
+        if not result["verified"]:
+            raise HTTPException(400, f"Payment verification failed: {result.get('error', 'unknown')}")
+
+    from datetime import timedelta
+    sub.is_active = True
+    sub.expires_at = datetime.utcnow() + timedelta(days=30)
+    sub.tx_hash = body.tx_hash
+    sub.payment_amount = monthly_fee
+    sub.ended_at = None
+
+    if monthly_fee > 0:
+        db.add(PaymentHistory(
+            user_id=user.id,
+            bot_id=bot_id,
+            tx_hash=body.tx_hash,
+            amount=monthly_fee,
+            network="polygon",
+        ))
+
+    await db.commit()
+    return {"message": "renewed", "expires_at": sub.expires_at.isoformat()}
