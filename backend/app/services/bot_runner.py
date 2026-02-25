@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 from sqlalchemy import select
@@ -8,7 +9,8 @@ from app.database import AsyncSessionLocal
 from app.models.bot import Bot, BotSubscription, BotStatus
 from app.models.order import Order, OrderSide, OrderType
 from app.core.redis import get_redis
-from app.services.matching_engine import try_fill_order
+from app.services.matching_engine import try_fill_order, try_fill_order_live
+from app.config import settings
 from app.services.indicators import calc_rsi, calc_ma, calc_bollinger
 from app.services.market_data import fetch_klines
 
@@ -109,6 +111,12 @@ async def run_bot(bot: Bot):
         sub_list = list(subs)
 
         for sub in sub_list:
+            # Skip expired subscriptions
+            if sub.expires_at and sub.expires_at.replace(tzinfo=None) < datetime.utcnow():
+                sub.is_active = False
+                await db.commit()
+                continue
+
             from app.models.wallet import Wallet
             from sqlalchemy import select as sel
 
@@ -177,7 +185,10 @@ async def run_bot(bot: Bot):
             )
             db.add(order)
             await db.flush()
-            await try_fill_order(db, order)
+            if settings.BINANCE_LIVE_TRADING:
+                await try_fill_order_live(db, order)
+            else:
+                await try_fill_order(db, order)
 
 async def bot_runner_loop():
     while True:

@@ -75,3 +75,57 @@ async def try_fill_order(db: AsyncSession, order: Order) -> dict:
     await db.commit()
 
     return {"filled": True, "fill_price": fill_price}
+
+
+async def try_fill_order_live(db: AsyncSession, order: Order) -> dict:
+    """Fill order via real Binance API."""
+    from app.services.binance_trader import BinanceTrader, pair_to_binance_symbol
+
+    trader = BinanceTrader()
+    try:
+        symbol = pair_to_binance_symbol(order.pair)
+        side = "BUY" if order.side == OrderSide.buy else "SELL"
+        result = await trader.place_market_order(symbol, side, order.quantity)
+
+        fills = result.get("fills", [])
+        if not fills:
+            return {"filled": False, "fill_price": 0}
+
+        total_qty = sum(Decimal(f["qty"]) for f in fills)
+        total_cost = sum(Decimal(f["price"]) * Decimal(f["qty"]) for f in fills)
+        avg_price = total_cost / total_qty if total_qty > 0 else Decimal("0")
+
+        base, quote = _base_quote(order.pair)
+
+        if order.side == OrderSide.buy:
+            quote_wallet = await get_wallet(db, order.user_id, quote)
+            base_wallet = await get_wallet(db, order.user_id, base)
+            if quote_wallet:
+                quote_wallet.balance -= total_cost
+            if base_wallet:
+                base_wallet.balance += total_qty
+            else:
+                db.add(Wallet(user_id=order.user_id, asset=base, balance=total_qty))
+        else:
+            base_wallet = await get_wallet(db, order.user_id, base)
+            quote_wallet = await get_wallet(db, order.user_id, quote)
+            if base_wallet:
+                base_wallet.balance -= total_qty
+            if quote_wallet:
+                quote_wallet.balance += total_cost
+            else:
+                db.add(Wallet(user_id=order.user_id, asset=quote, balance=total_cost))
+
+        order.filled_quantity = total_qty
+        order.status = OrderStatus.filled
+        order.price = avg_price
+        db.add(Trade(order_id=order.id, price=avg_price, quantity=total_qty))
+        await db.commit()
+
+        print(f"[LIVE] Order {order.id} filled: {side} {total_qty} {symbol} @ avg {avg_price}")
+        return {"filled": True, "fill_price": float(avg_price)}
+    except Exception as e:
+        print(f"[LIVE] Order {order.id} failed: {e}")
+        return {"filled": False, "fill_price": 0, "error": str(e)}
+    finally:
+        await trader.close()
