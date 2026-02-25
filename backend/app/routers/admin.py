@@ -6,6 +6,7 @@ from app.database import get_db
 from app.core.deps import require_admin
 from app.models.user import User
 from app.models.bot import Bot, BotStatus, BotSubscription, BotPerformance
+from app.models.payment import PaymentHistory
 from app.schemas.bot import CreateBotRequest, UpdateBotRequest
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -118,3 +119,106 @@ async def toggle_subscription(
     user.is_subscribed = body.get("is_subscribed", False)
     await db.commit()
     return {"message": "subscription updated"}
+
+
+@router.get("/subscriptions")
+async def list_subscriptions(
+    status: str = "all",
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(BotSubscription)
+    if status == "active":
+        query = query.where(BotSubscription.is_active == True)
+    elif status == "expired":
+        query = query.where(BotSubscription.is_active == False)
+
+    subs = list(await db.scalars(query.order_by(BotSubscription.started_at.desc())))
+    result = []
+    for sub in subs:
+        user = await db.get(User, sub.user_id)
+        bot = await db.get(Bot, sub.bot_id)
+        result.append({
+            "id": sub.id,
+            "user_id": sub.user_id,
+            "wallet_address": user.wallet_address if user else None,
+            "bot_id": sub.bot_id,
+            "bot_name": bot.name if bot else None,
+            "is_active": sub.is_active,
+            "allocated_usdt": float(sub.allocated_usdt) if sub.allocated_usdt else 0,
+            "payment_amount": float(sub.payment_amount) if sub.payment_amount else 0,
+            "tx_hash": sub.tx_hash,
+            "started_at": sub.started_at.isoformat() if sub.started_at else None,
+            "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
+            "ended_at": sub.ended_at.isoformat() if sub.ended_at else None,
+        })
+    return result
+
+
+@router.get("/subscriptions/stats")
+async def subscription_stats(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    active_count = await db.scalar(
+        select(func.count(BotSubscription.id)).where(BotSubscription.is_active == True)
+    )
+    expired_count = await db.scalar(
+        select(func.count(BotSubscription.id)).where(BotSubscription.is_active == False)
+    )
+    total_revenue = await db.scalar(
+        select(func.sum(PaymentHistory.amount))
+    )
+    return {
+        "active_subscriptions": active_count or 0,
+        "expired_subscriptions": expired_count or 0,
+        "total_revenue_usdt": float(total_revenue) if total_revenue else 0,
+    }
+
+
+@router.put("/subscriptions/{sub_id}")
+async def update_subscription(
+    sub_id: int,
+    body: dict,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    sub = await db.get(BotSubscription, sub_id)
+    if not sub:
+        raise HTTPException(404, "Subscription not found")
+
+    if "is_active" in body:
+        sub.is_active = body["is_active"]
+        if not body["is_active"]:
+            sub.ended_at = datetime.utcnow()
+    if "expires_at" in body:
+        sub.expires_at = datetime.fromisoformat(body["expires_at"])
+
+    await db.commit()
+    return {"message": "subscription updated"}
+
+
+@router.get("/payments")
+async def list_payments(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    payments = list(await db.scalars(
+        select(PaymentHistory).order_by(PaymentHistory.verified_at.desc()).limit(200)
+    ))
+    result = []
+    for p in payments:
+        user = await db.get(User, p.user_id)
+        bot = await db.get(Bot, p.bot_id)
+        result.append({
+            "id": p.id,
+            "user_id": p.user_id,
+            "wallet_address": user.wallet_address if user else None,
+            "bot_id": p.bot_id,
+            "bot_name": bot.name if bot else None,
+            "tx_hash": p.tx_hash,
+            "amount": float(p.amount),
+            "network": p.network,
+            "verified_at": p.verified_at.isoformat() if p.verified_at else None,
+        })
+    return result

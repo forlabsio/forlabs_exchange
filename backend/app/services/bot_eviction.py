@@ -140,3 +140,58 @@ async def daily_performance_update():
             perf.calculated_at = datetime.utcnow()
 
         await db.commit()
+
+
+async def check_subscription_expiry():
+    """Deactivate expired subscriptions and notify users."""
+    async with AsyncSessionLocal() as db:
+        # Find subscriptions expiring in 3 days (for notification)
+        warning_date = datetime.utcnow() + timedelta(days=3)
+        expiring_subs = await db.scalars(
+            select(BotSubscription).where(
+                BotSubscription.is_active == True,
+                BotSubscription.expires_at != None,
+                BotSubscription.expires_at <= warning_date,
+                BotSubscription.expires_at > datetime.utcnow(),
+            )
+        )
+        for sub in expiring_subs:
+            bot = await db.get(Bot, sub.bot_id)
+            bot_name = bot.name if bot else "Unknown"
+            existing = await db.scalar(
+                select(Notification).where(
+                    Notification.user_id == sub.user_id,
+                    Notification.type == "subscription_expiring",
+                    Notification.title == f"{bot_name} 구독 만료 임박",
+                    Notification.is_read == False,
+                )
+            )
+            if not existing:
+                db.add(Notification(
+                    user_id=sub.user_id,
+                    type="subscription_expiring",
+                    title=f"{bot_name} 구독 만료 임박",
+                    body=f"{bot_name} 봇 구독이 곧 만료됩니다. 갱신해주세요.",
+                ))
+
+        # Deactivate expired subscriptions
+        expired_subs = await db.scalars(
+            select(BotSubscription).where(
+                BotSubscription.is_active == True,
+                BotSubscription.expires_at != None,
+                BotSubscription.expires_at <= datetime.utcnow(),
+            )
+        )
+        for sub in expired_subs:
+            sub.is_active = False
+            sub.ended_at = datetime.utcnow()
+            bot = await db.get(Bot, sub.bot_id)
+            bot_name = bot.name if bot else "Unknown"
+            db.add(Notification(
+                user_id=sub.user_id,
+                type="subscription_expired",
+                title=f"{bot_name} 구독 만료",
+                body=f"{bot_name} 봇 구독이 만료되었습니다. 갱신하려면 봇 마켓에서 다시 결제해주세요.",
+            ))
+
+        await db.commit()
