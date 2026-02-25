@@ -33,9 +33,14 @@ export default function Navbar() {
             <Link href="/my-bots" className="hover:text-white transition-colors">내 봇</Link>
           )}
           {user?.role === "admin" && (
-            <Link href="/admin/bots" className="hover:text-white transition-colors font-medium" style={{ color: "#f59e0b" }}>
-              관리자
-            </Link>
+            <>
+              <Link href="/admin/bots" className="hover:text-white transition-colors font-medium" style={{ color: "#f59e0b" }}>
+                봇 관리
+              </Link>
+              <Link href="/admin/subscriptions" className="hover:text-white transition-colors font-medium" style={{ color: "#f59e0b" }}>
+                구독 관리
+              </Link>
+            </>
           )}
         </div>
       </div>
@@ -43,6 +48,9 @@ export default function Navbar() {
         {token ? (
           <>
             <Link href="/wallet" style={{ color: "var(--text-secondary)" }} className="hover:text-white transition-colors">자산</Link>
+            <span className="text-xs font-mono" style={{ color: "var(--text-secondary)" }}>
+              {user?.wallet_address ? `${user.wallet_address.slice(0, 6)}...${user.wallet_address.slice(-4)}` : ""}
+            </span>
             <button
               type="button"
               onClick={handleLogout}
@@ -53,10 +61,11 @@ export default function Navbar() {
           </>
         ) : (
           <>
-            <Link href="/login" style={{ color: "var(--text-secondary)" }} className="hover:text-white transition-colors">로그인</Link>
-            <Link href="/register"
-              className="px-4 py-1.5 rounded text-sm font-medium text-white"
-              style={{ background: "var(--blue)" }}>회원가입</Link>
+          <Link href="/login"
+            className="px-4 py-1.5 rounded text-sm font-medium text-white"
+            style={{ background: "#f6851b" }}>
+            지갑 연결
+          </Link>
           </>
         )}
       </div>
