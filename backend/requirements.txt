@@ -16,3 +16,5 @@ python-dotenv==1.0.1
 pydantic-settings==2.6.1
 aiosqlite==0.21.0
 email-validator==2.1.0
+eth-account==0.13.4
+web3==7.6.0
