@@ -12,8 +12,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
-    email = Column(String, unique=True, nullable=False, index=True)
-    password_hash = Column(String, nullable=False)
+    wallet_address = Column(String, unique=True, nullable=False, index=True)
     role = Column(Enum(UserRole), default=UserRole.user)
     is_subscribed = Column(Boolean, default=False)
     subscription_expires_at = Column(DateTime(timezone=True), nullable=True)

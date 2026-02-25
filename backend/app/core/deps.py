@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
 from app.core.security import decode_token
+from app.config import settings
 
 bearer = HTTPBearer()
 bearer_optional = HTTPBearer(auto_error=False)
@@ -33,7 +34,9 @@ async def get_optional_user(
     return await db.get(User, user_id)
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role.value != "admin":
+    if not settings.ADMIN_WALLET_ADDRESS:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin not configured")
+    if user.wallet_address.lower() != settings.ADMIN_WALLET_ADDRESS.lower():
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin only")
     return user
 

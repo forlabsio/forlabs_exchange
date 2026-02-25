@@ -35,6 +35,9 @@ class BotSubscription(Base):
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     ended_at = Column(DateTime(timezone=True), nullable=True)
     allocated_usdt = Column(Numeric(18, 2), nullable=False, server_default="100")
+    tx_hash = Column(String, nullable=True)
+    payment_amount = Column(Numeric(18, 6), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
 
     user = relationship("User", back_populates="bot_subscriptions")
     bot = relationship("Bot", back_populates="subscriptions")
