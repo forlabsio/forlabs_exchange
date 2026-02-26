@@ -322,8 +322,9 @@ async def unsubscribe_bot(
         net_qty = max(net_qty, Decimal("0")).quantize(Decimal("0.00001"))
 
         if net_qty > 0:
-            from app.services.matching_engine import try_fill_order
+            from app.services.matching_engine import try_fill_order, try_fill_order_live
             from app.models.order import OrderSide, OrderType
+            from app.config import is_live_trading
             sell_order = Order(
                 user_id=user.id,
                 pair=pair,
@@ -335,7 +336,10 @@ async def unsubscribe_bot(
             )
             db.add(sell_order)
             await db.flush()
-            await try_fill_order(db, sell_order)
+            if await is_live_trading():
+                await try_fill_order_live(db, sell_order)
+            else:
+                await try_fill_order(db, sell_order)
             await db.refresh(sub)
 
     # Calculate PnL to return capital + profit to unlocked balance

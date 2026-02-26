@@ -6,7 +6,8 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.order import Order, OrderSide, OrderType, OrderStatus
 from app.schemas.order import PlaceOrderRequest
-from app.services.matching_engine import try_fill_order
+from app.services.matching_engine import try_fill_order, try_fill_order_live
+from app.config import is_live_trading
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -19,6 +20,11 @@ async def place_order(
     if body.type == "limit" and not body.price:
         raise HTTPException(400, "Price required for limit orders")
 
+    # Live mode only supports market orders
+    live = await is_live_trading()
+    if live and body.type == "limit":
+        raise HTTPException(400, "Limit orders are not supported in live trading mode")
+
     order = Order(
         user_id=user.id,
         pair=body.pair,
@@ -30,7 +36,10 @@ async def place_order(
     db.add(order)
     await db.flush()
 
-    result = await try_fill_order(db, order)
+    if live:
+        result = await try_fill_order_live(db, order)
+    else:
+        result = await try_fill_order(db, order)
     return {"order_id": order.id, "status": order.status.value, "fill_result": result}
 
 @router.delete("/{order_id}")

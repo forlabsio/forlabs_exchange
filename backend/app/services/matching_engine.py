@@ -15,8 +15,11 @@ async def get_current_price(pair: str) -> float:
     ticker = json.loads(data)
     return float(ticker.get("last_price", 0))
 
-async def get_wallet(db: AsyncSession, user_id: int, asset: str) -> Optional[Wallet]:
-    return await db.scalar(select(Wallet).where(Wallet.user_id == user_id, Wallet.asset == asset))
+async def get_wallet(db: AsyncSession, user_id: int, asset: str, lock: bool = False) -> Optional[Wallet]:
+    stmt = select(Wallet).where(Wallet.user_id == user_id, Wallet.asset == asset)
+    if lock:
+        stmt = stmt.with_for_update()
+    return await db.scalar(stmt)
 
 def _base_quote(pair: str):
     parts = pair.split("_")
@@ -49,8 +52,8 @@ async def try_fill_order(db: AsyncSession, order: Order) -> dict:
     cost = qty * fill_price_dec
 
     if order.side == OrderSide.buy:
-        quote_wallet = await get_wallet(db, order.user_id, quote)
-        base_wallet = await get_wallet(db, order.user_id, base)
+        quote_wallet = await get_wallet(db, order.user_id, quote, lock=True)
+        base_wallet = await get_wallet(db, order.user_id, base, lock=True)
         if not quote_wallet or quote_wallet.balance < cost:
             return {"filled": False, "fill_price": fill_price}
         quote_wallet.balance -= cost
@@ -59,8 +62,8 @@ async def try_fill_order(db: AsyncSession, order: Order) -> dict:
         else:
             db.add(Wallet(user_id=order.user_id, asset=base, balance=qty))
     else:
-        base_wallet = await get_wallet(db, order.user_id, base)
-        quote_wallet = await get_wallet(db, order.user_id, quote)
+        base_wallet = await get_wallet(db, order.user_id, base, lock=True)
+        quote_wallet = await get_wallet(db, order.user_id, quote, lock=True)
         if not base_wallet or base_wallet.balance < qty:
             return {"filled": False, "fill_price": fill_price}
         base_wallet.balance -= qty
@@ -85,7 +88,13 @@ async def try_fill_order_live(db: AsyncSession, order: Order) -> dict:
     try:
         symbol = pair_to_binance_symbol(order.pair)
         side = "BUY" if order.side == OrderSide.buy else "SELL"
-        result = await trader.place_market_order(symbol, side, order.quantity)
+
+        # Validate and round quantity to Binance LOT_SIZE/MIN_NOTIONAL
+        current_price = Decimal(str(await get_current_price(order.pair)))
+        validated_qty = await trader.validate_quantity(symbol, order.quantity, current_price)
+        order.quantity = validated_qty
+
+        result = await trader.place_market_order(symbol, side, validated_qty)
 
         fills = result.get("fills", [])
         if not fills:
@@ -98,8 +107,8 @@ async def try_fill_order_live(db: AsyncSession, order: Order) -> dict:
         base, quote = _base_quote(order.pair)
 
         if order.side == OrderSide.buy:
-            quote_wallet = await get_wallet(db, order.user_id, quote)
-            base_wallet = await get_wallet(db, order.user_id, base)
+            quote_wallet = await get_wallet(db, order.user_id, quote, lock=True)
+            base_wallet = await get_wallet(db, order.user_id, base, lock=True)
             if quote_wallet:
                 quote_wallet.balance -= total_cost
             if base_wallet:
@@ -107,8 +116,8 @@ async def try_fill_order_live(db: AsyncSession, order: Order) -> dict:
             else:
                 db.add(Wallet(user_id=order.user_id, asset=base, balance=total_qty))
         else:
-            base_wallet = await get_wallet(db, order.user_id, base)
-            quote_wallet = await get_wallet(db, order.user_id, quote)
+            base_wallet = await get_wallet(db, order.user_id, base, lock=True)
+            quote_wallet = await get_wallet(db, order.user_id, quote, lock=True)
             if base_wallet:
                 base_wallet.balance -= total_qty
             if quote_wallet:
@@ -126,6 +135,8 @@ async def try_fill_order_live(db: AsyncSession, order: Order) -> dict:
         return {"filled": True, "fill_price": float(avg_price)}
     except Exception as e:
         print(f"[LIVE] Order {order.id} failed: {e}")
+        order.status = OrderStatus.cancelled
+        await db.commit()
         return {"filled": False, "fill_price": 0, "error": str(e)}
     finally:
         await trader.close()

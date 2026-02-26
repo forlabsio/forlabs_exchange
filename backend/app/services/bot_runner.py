@@ -130,8 +130,39 @@ async def run_bot(bot: Bot):
         sub_list = list(subs)
 
         for sub in sub_list:
-            # 1. Check expiry -> deactivate if expired
+            # 1. Check expiry -> deactivate if expired (close positions first)
             if sub.expires_at and sub.expires_at.replace(tzinfo=None) < datetime.utcnow():
+                # Close any open Binance position before deactivating
+                pm = PositionManager(bot.id, sub.user_id)
+                if await pm.has_position():
+                    pos = await pm.get_position()
+                    if pos:
+                        redis = await get_redis()
+                        ticker = await redis.get(f"market:{pair}:ticker")
+                        if ticker:
+                            from app.models.wallet import Wallet
+                            from sqlalchemy import select as sel
+                            base, quote = pair.split("_")
+                            base_wallet = await db.scalar(
+                                sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == base)
+                            )
+                            if base_wallet and base_wallet.balance > 0:
+                                exit_qty = base_wallet.balance.quantize(Decimal("0.00001"))
+                                if exit_qty > 0:
+                                    exit_side = "sell" if pos["side"] == "buy" else "buy"
+                                    order = Order(
+                                        user_id=sub.user_id, pair=pair,
+                                        side=OrderSide(exit_side), type=OrderType.market,
+                                        quantity=exit_qty, is_bot_order=True, bot_id=bot.id,
+                                    )
+                                    db.add(order)
+                                    await db.flush()
+                                    if await is_live_trading():
+                                        await try_fill_order_live(db, order)
+                                    else:
+                                        await try_fill_order(db, order)
+                                    print(f"Bot {bot.id} user {sub.user_id}: expiry close {exit_side} {exit_qty}")
+                    await pm.close_position()
                 sub.is_active = False
                 await db.commit()
                 continue
@@ -266,7 +297,7 @@ async def run_bot(bot: Bot):
                 result = await try_fill_order(db, order)
 
             # 10. Open position tracking (for strategies with SL/TP)
-            if result.get("filled") and stop_loss_atr and side == "buy":
+            if result.get("filled") and stop_loss_atr:
                 fill_price = float(result.get("fill_price", price_float))
                 await pm.open_position(
                     side=side,
