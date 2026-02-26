@@ -1,12 +1,13 @@
 from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, desc
 from app.database import get_db
 from app.core.deps import require_admin
 from app.models.user import User
 from app.models.bot import Bot, BotStatus, BotSubscription, BotPerformance
 from app.models.payment import PaymentHistory
+from app.models.withdrawal import Withdrawal, WithdrawalStatus
 from app.schemas.bot import CreateBotRequest, UpdateBotRequest
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -222,3 +223,120 @@ async def list_payments(
             "verified_at": p.verified_at.isoformat() if p.verified_at else None,
         })
     return result
+
+
+# ── Withdrawal management ──────────────────────────────────────────
+
+@router.get("/withdrawals")
+async def list_withdrawals(
+    status: str = "all",
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(Withdrawal)
+    if status == "pending":
+        query = query.where(Withdrawal.status == WithdrawalStatus.pending)
+    elif status == "completed":
+        query = query.where(Withdrawal.status == WithdrawalStatus.completed)
+    elif status == "rejected":
+        query = query.where(Withdrawal.status == WithdrawalStatus.rejected)
+
+    withdrawals = list(await db.scalars(query.order_by(desc(Withdrawal.created_at)).limit(200)))
+    result = []
+    for w in withdrawals:
+        user = await db.get(User, w.user_id)
+        result.append({
+            "id": w.id,
+            "user_id": w.user_id,
+            "wallet_address": user.wallet_address if user else None,
+            "amount": float(w.amount),
+            "to_address": w.to_address,
+            "network": w.network,
+            "status": w.status,
+            "tx_hash": w.tx_hash,
+            "admin_note": w.admin_note,
+            "created_at": w.created_at.isoformat() if w.created_at else None,
+            "processed_at": w.processed_at.isoformat() if w.processed_at else None,
+        })
+    return result
+
+
+@router.get("/withdrawals/stats")
+async def withdrawal_stats(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    pending_count = await db.scalar(
+        select(func.count(Withdrawal.id)).where(Withdrawal.status == WithdrawalStatus.pending)
+    )
+    pending_amount = await db.scalar(
+        select(func.sum(Withdrawal.amount)).where(Withdrawal.status == WithdrawalStatus.pending)
+    )
+    completed_count = await db.scalar(
+        select(func.count(Withdrawal.id)).where(Withdrawal.status == WithdrawalStatus.completed)
+    )
+    completed_amount = await db.scalar(
+        select(func.sum(Withdrawal.amount)).where(Withdrawal.status == WithdrawalStatus.completed)
+    )
+    return {
+        "pending_count": pending_count or 0,
+        "pending_amount_usdt": float(pending_amount) if pending_amount else 0,
+        "completed_count": completed_count or 0,
+        "completed_amount_usdt": float(completed_amount) if completed_amount else 0,
+    }
+
+
+@router.put("/withdrawals/{withdrawal_id}/approve")
+async def approve_withdrawal(
+    withdrawal_id: int,
+    body: dict,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin approves and completes a withdrawal by providing tx_hash."""
+    w = await db.get(Withdrawal, withdrawal_id)
+    if not w:
+        raise HTTPException(404, "Withdrawal not found")
+    if w.status != WithdrawalStatus.pending:
+        raise HTTPException(400, "이미 처리된 출금 요청입니다")
+
+    tx_hash = body.get("tx_hash", "")
+    if not tx_hash:
+        raise HTTPException(400, "tx_hash 필수")
+
+    w.status = WithdrawalStatus.completed
+    w.tx_hash = tx_hash
+    w.admin_note = body.get("note", "")
+    w.processed_at = datetime.utcnow()
+
+    # Deduct from user's wallet balance if they had DB balance
+    from app.models.wallet import Wallet
+    usdt_wallet = await db.scalar(
+        select(Wallet).where(Wallet.user_id == w.user_id, Wallet.asset == "USDT")
+    )
+    if usdt_wallet and float(usdt_wallet.balance) > 0:
+        deduct = min(float(usdt_wallet.balance), float(w.amount))
+        usdt_wallet.balance = float(usdt_wallet.balance) - deduct
+
+    await db.commit()
+    return {"message": "출금 승인 완료", "tx_hash": tx_hash}
+
+
+@router.put("/withdrawals/{withdrawal_id}/reject")
+async def reject_withdrawal(
+    withdrawal_id: int,
+    body: dict,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    w = await db.get(Withdrawal, withdrawal_id)
+    if not w:
+        raise HTTPException(404, "Withdrawal not found")
+    if w.status != WithdrawalStatus.pending:
+        raise HTTPException(400, "이미 처리된 출금 요청입니다")
+
+    w.status = WithdrawalStatus.rejected
+    w.admin_note = body.get("note", "")
+    w.processed_at = datetime.utcnow()
+    await db.commit()
+    return {"message": "출금 거절됨"}

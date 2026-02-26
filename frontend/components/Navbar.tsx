@@ -40,6 +40,9 @@ export default function Navbar() {
               <Link href="/admin/subscriptions" className="hover:text-white transition-colors font-medium" style={{ color: "#f59e0b" }}>
                 구독 관리
               </Link>
+              <Link href="/admin/withdrawals" className="hover:text-white transition-colors font-medium" style={{ color: "#f59e0b" }}>
+                출금 관리
+              </Link>
             </>
           )}
         </div>
