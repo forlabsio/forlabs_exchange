@@ -10,17 +10,19 @@ const USDT_CONTRACT = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
 const ADMIN_WALLET = process.env.NEXT_PUBLIC_ADMIN_WALLET || "";
 
 const STRATEGY_LABELS: Record<string, string> = {
-  alternating: "교차매매",
-  rsi: "RSI",
-  ma_cross: "MA 크로스",
-  boll: "볼린저밴드",
+  rsi_trend: "RSI + 추세필터",
+  boll_adx: "볼린저 + ADX",
+  trend_ma200: "Trend 200MA",
+  adaptive_grid: "Adaptive Grid",
+  breakout_lite: "Breakout Lite",
 };
 
 const STRATEGY_COLORS: Record<string, string> = {
-  alternating: "var(--blue)",
-  rsi: "#a78bfa",
-  ma_cross: "var(--green)",
-  boll: "#fb923c",
+  rsi_trend: "#a78bfa",
+  boll_adx: "#fb923c",
+  trend_ma200: "var(--blue)",
+  adaptive_grid: "var(--green)",
+  breakout_lite: "#f43f5e",
 };
 
 function StatBox({ label, value, color }: { label: string; value: string; color?: string }) {

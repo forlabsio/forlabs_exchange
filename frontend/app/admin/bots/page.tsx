@@ -5,10 +5,11 @@ import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 
 const STRATEGY_TYPES = [
-  { value: "alternating", label: "교차매매" },
-  { value: "rsi", label: "RSI" },
-  { value: "ma_cross", label: "MA 크로스" },
-  { value: "boll", label: "볼린저밴드" },
+  { value: "rsi_trend", label: "RSI + 추세필터" },
+  { value: "boll_adx", label: "볼린저 + ADX" },
+  { value: "trend_ma200", label: "Trend 200MA" },
+  { value: "adaptive_grid", label: "Adaptive Grid" },
+  { value: "breakout_lite", label: "Breakout Lite" },
 ];
 
 const PAIRS = ["BTC_USDT", "ETH_USDT", "BNB_USDT", "SOL_USDT"];
@@ -32,49 +33,86 @@ interface FormState {
   strategy_type: string;
   max_drawdown_limit: number;
   monthly_fee: number;
-  // common config
+  // common
   pair: string;
-  trade_pct: number;
   signal_interval: number;
-  // rsi
+  risk_pct: number;
+  // rsi_trend
   rsi_period: number;
   overbought: number;
   oversold: number;
-  // ma_cross
-  fast_period: number;
-  slow_period: number;
-  // boll
-  period: number;
-  deviation: number;
+  stop_loss_atr: number;
+  take_profit_atr: number;
+  // boll_adx
+  boll_period: number;
+  boll_std: number;
+  adx_threshold: number;
+  bw_min: number;
+  bw_max: number;
+  // trend_ma200
+  ma_period: number;
+  slope_lookback: number;
+  confirm_bars: number;
+  trailing_atr: number;
+  // adaptive_grid
+  grid_levels: number;
+  grid_spacing_atr: number;
+  // breakout_lite
+  donchian_period: number;
+  volume_ma_period: number;
+  volume_mult: number;
+  adx_min: number;
 }
 
 const DEFAULT_FORM: FormState = {
   name: "",
   description: "",
-  strategy_type: "alternating",
+  strategy_type: "rsi_trend",
   max_drawdown_limit: 20,
   monthly_fee: 0,
   pair: "BTC_USDT",
-  trade_pct: 10,
   signal_interval: 300,
+  risk_pct: 1.0,
+  // rsi_trend
   rsi_period: 14,
   overbought: 70,
   oversold: 30,
-  fast_period: 5,
-  slow_period: 20,
-  period: 20,
-  deviation: 2.0,
+  stop_loss_atr: 1.5,
+  take_profit_atr: 2.0,
+  // boll_adx
+  boll_period: 20,
+  boll_std: 2.0,
+  adx_threshold: 25,
+  bw_min: 0.02,
+  bw_max: 0.15,
+  // trend_ma200
+  ma_period: 200,
+  slope_lookback: 10,
+  confirm_bars: 3,
+  trailing_atr: 2.5,
+  // adaptive_grid
+  grid_levels: 5,
+  grid_spacing_atr: 0.5,
+  // breakout_lite
+  donchian_period: 20,
+  volume_ma_period: 20,
+  volume_mult: 1.5,
+  adx_min: 20,
 };
 
 function buildStrategyConfig(form: FormState): Record<string, unknown> {
-  const base = { pair: form.pair, trade_pct: form.trade_pct, signal_interval: form.signal_interval };
+  const base = { pair: form.pair, signal_interval: form.signal_interval, risk_pct: form.risk_pct };
   switch (form.strategy_type) {
-    case "rsi":
-      return { ...base, rsi_period: form.rsi_period, overbought: form.overbought, oversold: form.oversold };
-    case "ma_cross":
-      return { ...base, fast_period: form.fast_period, slow_period: form.slow_period };
-    case "boll":
-      return { ...base, period: form.period, deviation: form.deviation };
+    case "rsi_trend":
+      return { ...base, rsi_period: form.rsi_period, overbought: form.overbought, oversold: form.oversold, stop_loss_atr: form.stop_loss_atr, take_profit_atr: form.take_profit_atr };
+    case "boll_adx":
+      return { ...base, period: form.boll_period, std_dev: form.boll_std, adx_threshold: form.adx_threshold, bw_min: form.bw_min, bw_max: form.bw_max, stop_loss_atr: form.stop_loss_atr, take_profit_atr: form.take_profit_atr };
+    case "trend_ma200":
+      return { ...base, ma_period: form.ma_period, slope_lookback: form.slope_lookback, confirm_bars: form.confirm_bars, trailing_atr: form.trailing_atr };
+    case "adaptive_grid":
+      return { ...base, grid_levels: form.grid_levels, grid_spacing_atr: form.grid_spacing_atr };
+    case "breakout_lite":
+      return { ...base, donchian_period: form.donchian_period, volume_ma_period: form.volume_ma_period, volume_mult: form.volume_mult, adx_min: form.adx_min, trailing_atr: form.trailing_atr };
     default:
       return base;
   }
@@ -89,15 +127,28 @@ function parseFormFromBot(bot: AdminBot): FormState {
     max_drawdown_limit: bot.max_drawdown_limit,
     monthly_fee: bot.monthly_fee,
     pair: (c.pair as string) || "BTC_USDT",
-    trade_pct: (c.trade_pct as number) || 10,
     signal_interval: (c.signal_interval as number) || 300,
+    risk_pct: (c.risk_pct as number) || 1.0,
     rsi_period: (c.rsi_period as number) || 14,
     overbought: (c.overbought as number) || 70,
     oversold: (c.oversold as number) || 30,
-    fast_period: (c.fast_period as number) || 5,
-    slow_period: (c.slow_period as number) || 20,
-    period: (c.period as number) || 20,
-    deviation: (c.deviation as number) || 2.0,
+    stop_loss_atr: (c.stop_loss_atr as number) || 1.5,
+    take_profit_atr: (c.take_profit_atr as number) || 2.0,
+    boll_period: (c.period as number) || 20,
+    boll_std: (c.std_dev as number) || 2.0,
+    adx_threshold: (c.adx_threshold as number) || 25,
+    bw_min: (c.bw_min as number) || 0.02,
+    bw_max: (c.bw_max as number) || 0.15,
+    ma_period: (c.ma_period as number) || 200,
+    slope_lookback: (c.slope_lookback as number) || 10,
+    confirm_bars: (c.confirm_bars as number) || 3,
+    trailing_atr: (c.trailing_atr as number) || 2.5,
+    grid_levels: (c.grid_levels as number) || 5,
+    grid_spacing_atr: (c.grid_spacing_atr as number) || 0.5,
+    donchian_period: (c.donchian_period as number) || 20,
+    volume_ma_period: (c.volume_ma_period as number) || 20,
+    volume_mult: (c.volume_mult as number) || 1.5,
+    adx_min: (c.adx_min as number) || 20,
   };
 }
 
@@ -191,9 +242,9 @@ function BotModal({ initial, onClose, onSave }: {
                 {PAIRS.map((p) => <option key={p} value={p}>{p.replace("_", "/")}</option>)}
               </select>
             </InputRow>
-            <InputRow label="거래 비율 (%)">
-              <input type="number" className={inputCls} style={inputStyle} value={form.trade_pct}
-                min={1} max={100} onChange={(e) => set("trade_pct", Number(e.target.value))} />
+            <InputRow label="리스크 (%)">
+              <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.risk_pct}
+                min={0.1} max={5} onChange={(e) => set("risk_pct", Number(e.target.value))} />
             </InputRow>
             <InputRow label="신호 주기 (초)">
               <input type="number" className={inputCls} style={inputStyle} value={form.signal_interval}
@@ -201,8 +252,8 @@ function BotModal({ initial, onClose, onSave }: {
             </InputRow>
           </div>
 
-          {/* RSI params */}
-          {form.strategy_type === "rsi" && (
+          {/* RSI + Trend Filter */}
+          {form.strategy_type === "rsi_trend" && (
             <div className="grid grid-cols-3 gap-2">
               <InputRow label="RSI 기간">
                 <input type="number" className={inputCls} style={inputStyle} value={form.rsi_period}
@@ -216,33 +267,105 @@ function BotModal({ initial, onClose, onSave }: {
                 <input type="number" className={inputCls} style={inputStyle} value={form.oversold}
                   onChange={(e) => set("oversold", Number(e.target.value))} />
               </InputRow>
-            </div>
-          )}
-
-          {/* MA Cross params */}
-          {form.strategy_type === "ma_cross" && (
-            <div className="grid grid-cols-2 gap-2">
-              <InputRow label="단기 MA">
-                <input type="number" className={inputCls} style={inputStyle} value={form.fast_period}
-                  onChange={(e) => set("fast_period", Number(e.target.value))} />
+              <InputRow label="SL (ATR배수)">
+                <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.stop_loss_atr}
+                  onChange={(e) => set("stop_loss_atr", Number(e.target.value))} />
               </InputRow>
-              <InputRow label="장기 MA">
-                <input type="number" className={inputCls} style={inputStyle} value={form.slow_period}
-                  onChange={(e) => set("slow_period", Number(e.target.value))} />
+              <InputRow label="TP (ATR배수)">
+                <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.take_profit_atr}
+                  onChange={(e) => set("take_profit_atr", Number(e.target.value))} />
               </InputRow>
             </div>
           )}
 
-          {/* Bollinger params */}
-          {form.strategy_type === "boll" && (
-            <div className="grid grid-cols-2 gap-2">
-              <InputRow label="기간">
-                <input type="number" className={inputCls} style={inputStyle} value={form.period}
-                  onChange={(e) => set("period", Number(e.target.value))} />
+          {/* Bollinger + ADX */}
+          {form.strategy_type === "boll_adx" && (
+            <div className="grid grid-cols-3 gap-2">
+              <InputRow label="볼린저 기간">
+                <input type="number" className={inputCls} style={inputStyle} value={form.boll_period}
+                  onChange={(e) => set("boll_period", Number(e.target.value))} />
               </InputRow>
-              <InputRow label="표준편차 배수">
-                <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.deviation}
-                  onChange={(e) => set("deviation", Number(e.target.value))} />
+              <InputRow label="표준편차">
+                <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.boll_std}
+                  onChange={(e) => set("boll_std", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="ADX 한도">
+                <input type="number" className={inputCls} style={inputStyle} value={form.adx_threshold}
+                  onChange={(e) => set("adx_threshold", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="BW 최소">
+                <input type="number" step="0.01" className={inputCls} style={inputStyle} value={form.bw_min}
+                  onChange={(e) => set("bw_min", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="BW 최대">
+                <input type="number" step="0.01" className={inputCls} style={inputStyle} value={form.bw_max}
+                  onChange={(e) => set("bw_max", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="SL (ATR배수)">
+                <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.stop_loss_atr}
+                  onChange={(e) => set("stop_loss_atr", Number(e.target.value))} />
+              </InputRow>
+            </div>
+          )}
+
+          {/* Trend 200MA */}
+          {form.strategy_type === "trend_ma200" && (
+            <div className="grid grid-cols-3 gap-2">
+              <InputRow label="MA 기간">
+                <input type="number" className={inputCls} style={inputStyle} value={form.ma_period}
+                  onChange={(e) => set("ma_period", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="기울기 룩백">
+                <input type="number" className={inputCls} style={inputStyle} value={form.slope_lookback}
+                  onChange={(e) => set("slope_lookback", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="확인 봉수">
+                <input type="number" className={inputCls} style={inputStyle} value={form.confirm_bars}
+                  onChange={(e) => set("confirm_bars", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="트레일링 (ATR배수)">
+                <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.trailing_atr}
+                  onChange={(e) => set("trailing_atr", Number(e.target.value))} />
+              </InputRow>
+            </div>
+          )}
+
+          {/* Adaptive Grid */}
+          {form.strategy_type === "adaptive_grid" && (
+            <div className="grid grid-cols-2 gap-2">
+              <InputRow label="그리드 단수">
+                <input type="number" className={inputCls} style={inputStyle} value={form.grid_levels}
+                  min={3} max={10} onChange={(e) => set("grid_levels", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="간격 (ATR배수)">
+                <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.grid_spacing_atr}
+                  onChange={(e) => set("grid_spacing_atr", Number(e.target.value))} />
+              </InputRow>
+            </div>
+          )}
+
+          {/* Breakout Lite */}
+          {form.strategy_type === "breakout_lite" && (
+            <div className="grid grid-cols-3 gap-2">
+              <InputRow label="돈치안 기간">
+                <input type="number" className={inputCls} style={inputStyle} value={form.donchian_period}
+                  onChange={(e) => set("donchian_period", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="거래량 MA">
+                <input type="number" className={inputCls} style={inputStyle} value={form.volume_ma_period}
+                  onChange={(e) => set("volume_ma_period", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="거래량 배수">
+                <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.volume_mult}
+                  onChange={(e) => set("volume_mult", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="ADX 최소">
+                <input type="number" className={inputCls} style={inputStyle} value={form.adx_min}
+                  onChange={(e) => set("adx_min", Number(e.target.value))} />
+              </InputRow>
+              <InputRow label="트레일링 (ATR배수)">
+                <input type="number" step="0.1" className={inputCls} style={inputStyle} value={form.trailing_atr}
+                  onChange={(e) => set("trailing_atr", Number(e.target.value))} />
               </InputRow>
             </div>
           )}
@@ -312,7 +435,7 @@ export default function AdminBotsPage() {
   };
 
   const STRATEGY_LABELS: Record<string, string> = {
-    alternating: "교차매매", rsi: "RSI", ma_cross: "MA 크로스", boll: "볼린저밴드",
+    rsi_trend: "RSI + 추세필터", boll_adx: "볼린저 + ADX", trend_ma200: "Trend 200MA", adaptive_grid: "Adaptive Grid", breakout_lite: "Breakout Lite",
   };
 
   if (!user || user.role !== "admin") {

@@ -5,17 +5,19 @@ import { useAuthStore } from "@/stores/authStore";
 import { useRouter } from "next/navigation";
 
 const STRATEGY_LABELS: Record<string, string> = {
-  alternating: "교차매매",
-  rsi: "RSI",
-  ma_cross: "MA 크로스",
-  boll: "볼린저밴드",
+  rsi_trend: "RSI + 추세필터",
+  boll_adx: "볼린저 + ADX",
+  trend_ma200: "Trend 200MA",
+  adaptive_grid: "Adaptive Grid",
+  breakout_lite: "Breakout Lite",
 };
 
 const STRATEGY_COLORS: Record<string, string> = {
-  alternating: "#6366f1",
-  rsi: "#f59e0b",
-  ma_cross: "#3b82f6",
-  boll: "#8b5cf6",
+  rsi_trend: "#a78bfa",
+  boll_adx: "#fb923c",
+  trend_ma200: "#3b82f6",
+  adaptive_grid: "#10b981",
+  breakout_lite: "#f43f5e",
 };
 
 function TradesTable({ trades }: { trades: BotTrade[] }) {
