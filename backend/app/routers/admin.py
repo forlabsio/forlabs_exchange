@@ -24,11 +24,33 @@ async def system_status(admin: User = Depends(require_admin)):
 
 
 @router.post("/toggle-live-trading")
-async def toggle_live_trading(admin: User = Depends(require_admin)):
-    """Toggle between simulation and live trading mode via Redis."""
+async def toggle_live_trading(
+    body: dict = {},
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle between simulation and live trading mode via Redis.
+
+    Switching FROM live to simulation requires {"confirm": "SWITCH_TO_SIM"}.
+    This is dangerous because simulation trades corrupt real balances.
+    """
     redis = await get_redis()
     current = await is_live_trading()
     new_value = not current
+
+    # Block switching from live → simulation if active subscriptions exist
+    if current and not new_value:
+        active_count = await db.scalar(
+            select(func.count()).select_from(BotSubscription).where(BotSubscription.is_active == True)
+        )
+        if active_count and active_count > 0:
+            if body.get("confirm") != "SWITCH_TO_SIM":
+                raise HTTPException(
+                    400,
+                    f"활성 구독 {active_count}건이 있습니다. 시뮬레이션 전환 시 실제 잔액이 가짜 거래로 오염됩니다. "
+                    f'확인하려면 confirm: "SWITCH_TO_SIM"을 전송하세요.'
+                )
+
     await redis.set("system:live_trading", "true" if new_value else "false")
     return {
         "live_trading": new_value,
@@ -378,7 +400,13 @@ async def reset_trading_data(
     Clears: subscriptions, wallets, orders, trades, withdrawals, payments, Redis positions.
     Preserves: users, bots.
     Requires confirmation: {"confirm": "RESET"}
+    BLOCKED in live trading mode to protect real user assets.
     """
+    if await is_live_trading():
+        raise HTTPException(
+            403,
+            "운영 모드에서는 초기화할 수 없습니다. 먼저 시뮬레이션 모드로 전환하세요."
+        )
     if body.get("confirm") != "RESET":
         raise HTTPException(400, 'confirm: "RESET" 필수')
 

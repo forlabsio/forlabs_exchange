@@ -554,12 +554,23 @@ export default function AdminBotsPage() {
           <button
             type="button"
             onClick={async () => {
-              const msg = liveTrading
-                ? "시뮬레이션 모드로 전환하시겠습니까?"
-                : "운영 모드(실거래)로 전환하시겠습니까?\nBinance에서 실제 주문이 실행됩니다.";
-              if (!confirm(msg)) return;
+              let confirmBody = {};
+              if (liveTrading) {
+                const input = prompt(
+                  "⚠️ 경고: 시뮬레이션 전환 시 실제 유저 잔액이 가짜 거래로 오염될 수 있습니다.\n" +
+                  "활성 구독이 있다면 반드시 모든 봇을 중지한 후 전환하세요.\n\n" +
+                  '확인하려면 "SWITCH_TO_SIM"을 입력하세요:'
+                );
+                if (input !== "SWITCH_TO_SIM") return;
+                confirmBody = { confirm: "SWITCH_TO_SIM" };
+              } else {
+                if (!confirm("운영 모드(실거래)로 전환하시겠습니까?\nBinance에서 실제 주문이 실행됩니다.")) return;
+              }
               try {
-                const res = await apiFetch("/api/admin/toggle-live-trading", { method: "POST" });
+                const res = await apiFetch("/api/admin/toggle-live-trading", {
+                  method: "POST",
+                  body: JSON.stringify(confirmBody),
+                });
                 setLiveTrading(res.live_trading);
                 alert(res.message);
               } catch (e) {
