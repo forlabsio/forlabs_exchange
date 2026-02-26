@@ -14,7 +14,7 @@ class Bot(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
     description = Column(String(500))
-    strategy_type = Column(String(20), default="alternating")
+    strategy_type = Column(String(30), default="rsi_trend")
     strategy_config = Column(JSON, default={})
     status = Column(Enum(BotStatus), default=BotStatus.active)
     max_drawdown_limit = Column(Numeric(5, 2), default=20.0)

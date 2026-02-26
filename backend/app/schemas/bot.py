@@ -4,7 +4,7 @@ from typing import Optional
 class CreateBotRequest(BaseModel):
     name: str
     description: str
-    strategy_type: str = "alternating"
+    strategy_type: str = "rsi_trend"
     strategy_config: dict = {}
     max_drawdown_limit: float = 20.0
     monthly_fee: float = 0.0
