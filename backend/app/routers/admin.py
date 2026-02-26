@@ -340,3 +340,55 @@ async def reject_withdrawal(
     w.processed_at = datetime.utcnow()
     await db.commit()
     return {"message": "출금 거절됨"}
+
+
+# ── DB Reset for production transition ────────────────────────────
+
+@router.post("/reset-trading-data")
+async def reset_trading_data(
+    body: dict,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset all trading data for production transition.
+
+    Clears: subscriptions, wallets, orders, trades, withdrawals, payments, Redis positions.
+    Preserves: users, bots.
+    Requires confirmation: {"confirm": "RESET"}
+    """
+    if body.get("confirm") != "RESET":
+        raise HTTPException(400, 'confirm: "RESET" 필수')
+
+    from app.models.order import Order, Trade
+    from app.models.wallet import Wallet
+    from app.core.redis import get_redis
+
+    # 1. Delete trades, orders, subscriptions, withdrawals, payments, wallets
+    await db.execute(select(Trade).execution_options(synchronize_session=False))
+    await db.execute(Trade.__table__.delete())
+    await db.execute(Order.__table__.delete())
+    await db.execute(BotSubscription.__table__.delete())
+    await db.execute(Withdrawal.__table__.delete())
+    await db.execute(PaymentHistory.__table__.delete())
+    await db.execute(Wallet.__table__.delete())
+
+    # 2. Reset bot performance
+    await db.execute(BotPerformance.__table__.delete())
+
+    await db.commit()
+
+    # 3. Clear Redis position/cooldown keys
+    redis = await get_redis()
+    cursor = 0
+    while True:
+        cursor, keys = await redis.scan(cursor, match="bot:*", count=200)
+        if keys:
+            await redis.delete(*keys)
+        if cursor == 0:
+            break
+
+    return {
+        "message": "모든 거래 데이터가 초기화되었습니다",
+        "preserved": ["users", "bots"],
+        "cleared": ["trades", "orders", "subscriptions", "withdrawals", "payments", "wallets", "bot_performance", "redis_positions"],
+    }
