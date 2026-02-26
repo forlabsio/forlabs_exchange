@@ -527,6 +527,33 @@ export default function AdminBotsPage() {
         </div>
       )}
 
+      {/* System Management */}
+      <div className="mt-12 p-6 rounded-xl" style={{ background: "var(--bg-panel)", border: "1px solid var(--border)" }}>
+        <h2 className="text-lg font-bold mb-1" style={{ color: "var(--text-primary)" }}>시스템 관리</h2>
+        <p className="text-xs mb-4" style={{ color: "var(--text-secondary)" }}>
+          운영 전환 시 거래 데이터를 초기화합니다. 유저와 봇은 보존됩니다.
+        </p>
+        <button
+          type="button"
+          onClick={async () => {
+            const input = prompt('모든 거래 데이터(주문, 잔액, 구독, 출금 등)가 삭제됩니다.\n확인하려면 "RESET"을 입력하세요:');
+            if (input !== "RESET") return;
+            try {
+              const res = await apiFetch("/api/admin/reset-trading-data", {
+                method: "POST",
+                body: JSON.stringify({ confirm: "RESET" }),
+              });
+              alert(res.message || "초기화 완료");
+            } catch (e) {
+              alert(e instanceof Error ? e.message : "초기화 실패");
+            }
+          }}
+          className="px-4 py-2 rounded-lg text-sm font-medium"
+          style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)" }}>
+          거래 데이터 초기화
+        </button>
+      </div>
+
       {modal.open && (
         <BotModal
           initial={modal.bot}
