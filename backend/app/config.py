@@ -30,3 +30,13 @@ class Settings(BaseSettings):
         return v
 
 settings = Settings()
+
+
+async def is_live_trading() -> bool:
+    """Check Redis override first, then fall back to env var."""
+    from app.core.redis import get_redis
+    redis = await get_redis()
+    override = await redis.get("system:live_trading")
+    if override is not None:
+        return override == "true"
+    return settings.BINANCE_LIVE_TRADING

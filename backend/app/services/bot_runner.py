@@ -10,7 +10,7 @@ from app.models.bot import Bot, BotSubscription, BotStatus
 from app.models.order import Order, OrderSide, OrderType
 from app.core.redis import get_redis
 from app.services.matching_engine import try_fill_order, try_fill_order_live
-from app.config import settings
+from app.config import settings, is_live_trading
 from app.services.strategies import STRATEGIES
 from app.services.position_manager import PositionManager
 
@@ -175,7 +175,7 @@ async def run_bot(bot: Bot):
                             )
                             db.add(order)
                             await db.flush()
-                            if settings.BINANCE_LIVE_TRADING:
+                            if await is_live_trading():
                                 await try_fill_order_live(db, order)
                             else:
                                 await try_fill_order(db, order)
@@ -260,7 +260,7 @@ async def run_bot(bot: Bot):
             db.add(order)
             await db.flush()
 
-            if settings.BINANCE_LIVE_TRADING:
+            if await is_live_trading():
                 result = await try_fill_order_live(db, order)
             else:
                 result = await try_fill_order(db, order)

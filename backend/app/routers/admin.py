@@ -9,7 +9,8 @@ from app.models.bot import Bot, BotStatus, BotSubscription, BotPerformance
 from app.models.payment import PaymentHistory
 from app.models.withdrawal import Withdrawal, WithdrawalStatus
 from app.schemas.bot import CreateBotRequest, UpdateBotRequest
-from app.config import settings
+from app.config import settings, is_live_trading
+from app.core.redis import get_redis
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -18,7 +19,20 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 async def system_status(admin: User = Depends(require_admin)):
     """Return system mode info (simulation vs live)."""
     return {
-        "live_trading": settings.BINANCE_LIVE_TRADING,
+        "live_trading": await is_live_trading(),
+    }
+
+
+@router.post("/toggle-live-trading")
+async def toggle_live_trading(admin: User = Depends(require_admin)):
+    """Toggle between simulation and live trading mode via Redis."""
+    redis = await get_redis()
+    current = await is_live_trading()
+    new_value = not current
+    await redis.set("system:live_trading", "true" if new_value else "false")
+    return {
+        "live_trading": new_value,
+        "message": "운영 모드" if new_value else "시뮬레이션 모드",
     }
 
 
@@ -370,7 +384,6 @@ async def reset_trading_data(
 
     from app.models.order import Order, Trade
     from app.models.wallet import Wallet
-    from app.core.redis import get_redis
 
     # 1. Delete trades, orders, subscriptions, withdrawals, payments, wallets
     await db.execute(select(Trade).execution_options(synchronize_session=False))

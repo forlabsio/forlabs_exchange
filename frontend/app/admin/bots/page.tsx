@@ -406,6 +406,7 @@ export default function AdminBotsPage() {
   const router = useRouter();
   const [bots, setBots] = useState<AdminBot[]>([]);
   const [modal, setModal] = useState<{ open: boolean; bot: AdminBot | null }>({ open: false, bot: null });
+  const [liveTrading, setLiveTrading] = useState(false);
 
   useEffect(() => {
     hydrate().then(() => {
@@ -416,7 +417,12 @@ export default function AdminBotsPage() {
 
   useEffect(() => {
     if (user && user.role !== "admin") { router.push("/"); }
-    if (user && user.role === "admin") { loadBots(); }
+    if (user && user.role === "admin") {
+      loadBots();
+      apiFetch("/api/admin/system-status")
+        .then((data) => setLiveTrading(data.live_trading))
+        .catch(() => {});
+    }
   }, [user]);
 
   const loadBots = async () => {
@@ -531,8 +537,45 @@ export default function AdminBotsPage() {
       <div className="mt-12 p-6 rounded-xl" style={{ background: "var(--bg-panel)", border: "1px solid var(--border)" }}>
         <h2 className="text-lg font-bold mb-1" style={{ color: "var(--text-primary)" }}>시스템 관리</h2>
         <p className="text-xs mb-4" style={{ color: "var(--text-secondary)" }}>
-          운영 전환 시 거래 데이터를 초기화합니다. 유저와 봇은 보존됩니다.
+          트레이딩 모드 전환 및 데이터 초기화
         </p>
+
+        <div className="flex items-center gap-4 mb-6 p-4 rounded-lg" style={{ background: "var(--bg-base)" }}>
+          <div className="flex-1">
+            <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+              현재 모드: <span style={{ color: liveTrading ? "var(--green)" : "#ef4444" }}>
+                {liveTrading ? "운영 (Live)" : "시뮬레이션"}
+              </span>
+            </p>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-secondary)" }}>
+              {liveTrading ? "Binance 실거래 주문이 실행됩니다" : "내부 매칭 엔진으로 시뮬레이션합니다"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              const msg = liveTrading
+                ? "시뮬레이션 모드로 전환하시겠습니까?"
+                : "운영 모드(실거래)로 전환하시겠습니까?\nBinance에서 실제 주문이 실행됩니다.";
+              if (!confirm(msg)) return;
+              try {
+                const res = await apiFetch("/api/admin/toggle-live-trading", { method: "POST" });
+                setLiveTrading(res.live_trading);
+                alert(res.message);
+              } catch (e) {
+                alert(e instanceof Error ? e.message : "전환 실패");
+              }
+            }}
+            className="px-4 py-2 rounded-lg text-sm font-medium"
+            style={{
+              background: liveTrading ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.15)",
+              color: liveTrading ? "#ef4444" : "var(--green)",
+              border: `1px solid ${liveTrading ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.3)"}`,
+            }}>
+            {liveTrading ? "시뮬레이션으로 전환" : "운영 모드로 전환"}
+          </button>
+        </div>
+
         <button
           type="button"
           onClick={async () => {
