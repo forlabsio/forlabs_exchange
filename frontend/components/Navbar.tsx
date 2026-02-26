@@ -44,12 +44,6 @@ export default function Navbar() {
           )}
           {user?.role === "admin" && (
             <>
-              {isSimulation && (
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide animate-pulse"
-                  style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.4)" }}>
-                  SIMULATION
-                </span>
-              )}
               <Link href="/admin/bots" className="hover:text-white transition-colors font-medium" style={{ color: "#f59e0b" }}>
                 봇 관리
               </Link>
@@ -66,6 +60,12 @@ export default function Navbar() {
       <div className="flex items-center gap-4 text-sm">
         {token ? (
           <>
+            {isSimulation && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide animate-pulse"
+                style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.4)" }}>
+                SIMULATION
+              </span>
+            )}
             <Link href="/wallet" style={{ color: "var(--text-secondary)" }} className="hover:text-white transition-colors">자산</Link>
             <span className="text-xs font-mono" style={{ color: "var(--text-secondary)" }}>
               {user?.wallet_address ? `${user.wallet_address.slice(0, 6)}...${user.wallet_address.slice(-4)}` : ""}
