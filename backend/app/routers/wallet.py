@@ -11,6 +11,7 @@ from app.models.user import User
 from app.models.wallet import Wallet
 from app.models.bot import Bot, BotSubscription
 from app.models.withdrawal import Withdrawal, WithdrawalStatus
+from app.models.payment import PaymentHistory
 
 router = APIRouter(prefix="/api/wallet", tags=["wallet"])
 
@@ -18,6 +19,63 @@ router = APIRouter(prefix="/api/wallet", tags=["wallet"])
 class WithdrawRequest(BaseModel):
     amount: float = Field(gt=0)
     to_address: str
+
+
+class DepositVerifyRequest(BaseModel):
+    tx_hash: str
+
+@router.post("/deposit/verify")
+async def verify_deposit(
+    body: DepositVerifyRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """User deposits Polygon USDT to admin wallet, provides tx_hash for verification."""
+    from app.services.payment_verifier import verify_polygon_usdt_payment
+    from app.config import settings
+
+    # Check tx not already used
+    existing = await db.scalar(
+        select(PaymentHistory).where(PaymentHistory.tx_hash == body.tx_hash)
+    )
+    if existing:
+        raise HTTPException(400, "이미 사용된 트랜잭션입니다")
+
+    result = await verify_polygon_usdt_payment(
+        tx_hash=body.tx_hash,
+        expected_to=settings.ADMIN_WALLET_ADDRESS,
+        expected_amount=0.01,  # minimum deposit
+    )
+    if not result["verified"]:
+        raise HTTPException(400, f"입금 검증 실패: {result.get('error', 'unknown')}")
+
+    amount = result["amount"]
+
+    # Credit user's USDT wallet
+    usdt_wallet = await db.scalar(
+        select(Wallet).where(Wallet.user_id == user.id, Wallet.asset == "USDT")
+    )
+    if usdt_wallet:
+        usdt_wallet.balance = float(usdt_wallet.balance or 0) + amount
+    else:
+        db.add(Wallet(user_id=user.id, asset="USDT", balance=amount))
+
+    # Record payment for duplicate prevention
+    db.add(PaymentHistory(
+        user_id=user.id,
+        bot_id=0,  # 0 = deposit, not bot subscription
+        tx_hash=body.tx_hash,
+        amount=amount,
+        network="polygon",
+    ))
+
+    await db.commit()
+    return {
+        "message": "입금이 확인되었습니다",
+        "amount": amount,
+        "from_address": result.get("from_address"),
+    }
+
 
 @router.get("")
 async def get_wallet(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -43,15 +101,22 @@ async def get_wallet(user: User = Depends(get_current_user), db: AsyncSession = 
 
 @router.get("/withdrawable")
 async def get_withdrawable(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Calculate how much USDT the user can withdraw based on bot PnL."""
+    """Calculate how much USDT the user can withdraw.
+
+    Withdrawable = unlocked wallet balance - pending withdrawals.
+    Funds locked in active bot subscriptions are NOT withdrawable
+    (user must unsubscribe first to unlock capital + PnL).
+    """
     from app.services.stats import calc_bot_stats
 
+    # Active bot subscriptions (locked funds + PnL info)
     subs = await db.scalars(
         select(BotSubscription).where(
             BotSubscription.user_id == user.id,
             BotSubscription.is_active == True,
         )
     )
+    total_locked = 0.0
     total_pnl = 0.0
     details = []
     for sub in subs:
@@ -64,6 +129,7 @@ async def get_withdrawable(user: User = Depends(get_current_user), db: AsyncSess
         stats = await calc_bot_stats(db, user.id, bot.id, allocated, pair)
         pnl = stats["pnl_usdt"]
         total_pnl += pnl
+        total_locked += float(allocated)
         details.append({
             "bot_id": bot.id,
             "bot_name": bot.name,
@@ -71,11 +137,12 @@ async def get_withdrawable(user: User = Depends(get_current_user), db: AsyncSess
             "pnl_usdt": pnl,
         })
 
-    # Also check DB wallet balance (from previous settlements or admin deposits)
+    # Unlocked wallet balance (available for withdrawal)
     usdt_wallet = await db.scalar(
         select(Wallet).where(Wallet.user_id == user.id, Wallet.asset == "USDT")
     )
     wallet_balance = float(usdt_wallet.balance) if usdt_wallet else 0.0
+    locked_balance = float(usdt_wallet.locked_balance) if usdt_wallet and usdt_wallet.locked_balance else 0.0
 
     # Pending withdrawal total
     pending_total = await db.scalar(
@@ -86,11 +153,12 @@ async def get_withdrawable(user: User = Depends(get_current_user), db: AsyncSess
     )
     pending_amount = float(pending_total) if pending_total else 0.0
 
-    withdrawable = max(total_pnl + wallet_balance - pending_amount, 0.0)
+    withdrawable = max(wallet_balance - pending_amount, 0.0)
 
     return {
-        "total_pnl_usdt": total_pnl,
         "wallet_balance_usdt": wallet_balance,
+        "locked_in_bots_usdt": locked_balance,
+        "total_pnl_usdt": total_pnl,
         "pending_withdrawal_usdt": pending_amount,
         "withdrawable_usdt": withdrawable,
         "bot_details": details,
@@ -103,27 +171,7 @@ async def request_withdrawal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """User requests a withdrawal. Goes to admin for approval."""
-    from app.services.stats import calc_bot_stats
-
-    # Calculate withdrawable amount
-    subs = await db.scalars(
-        select(BotSubscription).where(
-            BotSubscription.user_id == user.id,
-            BotSubscription.is_active == True,
-        )
-    )
-    total_pnl = 0.0
-    for sub in subs:
-        bot = await db.get(Bot, sub.bot_id)
-        if not bot:
-            continue
-        config = bot.strategy_config or {}
-        pair = config.get("pair", "BTC_USDT")
-        allocated = Decimal(str(sub.allocated_usdt or 100))
-        stats = await calc_bot_stats(db, user.id, bot.id, allocated, pair)
-        total_pnl += stats["pnl_usdt"]
-
+    """User requests a withdrawal from unlocked balance. Goes to admin for approval."""
     usdt_wallet = await db.scalar(
         select(Wallet).where(Wallet.user_id == user.id, Wallet.asset == "USDT")
     )
@@ -137,7 +185,7 @@ async def request_withdrawal(
     )
     pending_amount = float(pending_total) if pending_total else 0.0
 
-    withdrawable = total_pnl + wallet_balance - pending_amount
+    withdrawable = wallet_balance - pending_amount
     if body.amount > withdrawable:
         raise HTTPException(400, f"출금 가능 금액 초과 (가능: {withdrawable:.2f} USDT)")
 

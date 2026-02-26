@@ -8,6 +8,7 @@ from sqlalchemy import select, func, desc
 from app.database import get_db
 from app.core.deps import get_current_user, get_optional_user
 from app.models.user import User
+from app.models.wallet import Wallet
 from app.models.bot import Bot, BotSubscription, BotStatus, BotPerformance
 from app.models.order import Order, Trade
 from app.services.stats import calc_bot_stats
@@ -228,6 +229,18 @@ async def subscribe_bot(
     if existing_payment:
         raise HTTPException(400, "Transaction already used")
 
+    # Check user has enough USDT balance to allocate
+    usdt_wallet = await db.scalar(
+        select(Wallet).where(Wallet.user_id == user.id, Wallet.asset == "USDT")
+    )
+    available_balance = float(usdt_wallet.balance) if usdt_wallet else 0.0
+    if available_balance < body.allocated_usdt:
+        raise HTTPException(
+            400,
+            f"USDT 잔액 부족 (보유: {available_balance:.2f}, 필요: {body.allocated_usdt:.2f}). "
+            f"자산 페이지에서 먼저 입금하세요."
+        )
+
     monthly_fee = float(bot.monthly_fee) if bot.monthly_fee else 0
     if monthly_fee > 0:
         result = await verify_polygon_usdt_payment(
@@ -237,6 +250,10 @@ async def subscribe_bot(
         )
         if not result["verified"]:
             raise HTTPException(400, f"Payment verification failed: {result.get('error', 'unknown')}")
+
+    # Lock allocated USDT: move from balance → locked_balance
+    usdt_wallet.balance = float(usdt_wallet.balance) - body.allocated_usdt
+    usdt_wallet.locked_balance = float(usdt_wallet.locked_balance or 0) + body.allocated_usdt
 
     from datetime import timedelta
     expires_at = datetime.utcnow() + timedelta(days=30)
@@ -267,7 +284,7 @@ async def subscribe_bot(
 @router.delete("/{bot_id}/subscribe")
 async def unsubscribe_bot(
     bot_id: int,
-    settle: bool = Query(default=False),
+    settle: bool = Query(default=True),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -281,11 +298,13 @@ async def unsubscribe_bot(
     if not sub:
         raise HTTPException(404, "Subscription not found")
 
-    if settle:
-        bot = await db.get(Bot, bot_id)
-        config = (bot.strategy_config or {}) if bot else {}
-        pair = config.get("pair", "BTC_USDT")
+    bot = await db.get(Bot, bot_id)
+    config = (bot.strategy_config or {}) if bot else {}
+    pair = config.get("pair", "BTC_USDT")
+    allocated = Decimal(str(sub.allocated_usdt or 100))
 
+    if settle:
+        # Sell any remaining positions on Binance
         orders = await db.scalars(
             select(Order).where(
                 Order.user_id == user.id,
@@ -304,6 +323,7 @@ async def unsubscribe_bot(
 
         if net_qty > 0:
             from app.services.matching_engine import try_fill_order
+            from app.models.order import OrderSide, OrderType
             sell_order = Order(
                 user_id=user.id,
                 pair=pair,
@@ -316,13 +336,33 @@ async def unsubscribe_bot(
             db.add(sell_order)
             await db.flush()
             await try_fill_order(db, sell_order)
-            # try_fill_order commits the transaction; start fresh for sub update
             await db.refresh(sub)
+
+    # Calculate PnL to return capital + profit to unlocked balance
+    stats = await calc_bot_stats(db, user.id, bot_id, allocated, pair)
+    pnl = Decimal(str(stats["pnl_usdt"]))
+    return_amount = float(allocated + pnl)  # original capital + profit (or minus loss)
+    return_amount = max(return_amount, 0.0)  # can't go below zero
+
+    # Move from locked → unlocked balance
+    usdt_wallet = await db.scalar(
+        select(Wallet).where(Wallet.user_id == user.id, Wallet.asset == "USDT")
+    )
+    if usdt_wallet:
+        usdt_wallet.locked_balance = max(float(usdt_wallet.locked_balance or 0) - float(allocated), 0.0)
+        usdt_wallet.balance = float(usdt_wallet.balance or 0) + return_amount
+    else:
+        db.add(Wallet(user_id=user.id, asset="USDT", balance=return_amount))
 
     sub.is_active = False
     sub.ended_at = datetime.utcnow()
     await db.commit()
-    return {"message": "unsubscribed"}
+    return {
+        "message": "unsubscribed",
+        "allocated_usdt": float(allocated),
+        "pnl_usdt": float(pnl),
+        "returned_usdt": return_amount,
+    }
 
 
 @router.post("/{bot_id}/renew")

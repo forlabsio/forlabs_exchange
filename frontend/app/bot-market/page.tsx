@@ -52,6 +52,10 @@ function SubscribeModal({ bot, allocation, onAllocationChange, onClose, loading,
       alert("MetaMask가 필요합니다.");
       return;
     }
+    if (usdtBalance < allocation) {
+      alert(`USDT 잔액 부족 (보유: ${usdtBalance.toFixed(2)}, 필요: ${allocation})\n자산 페이지에서 먼저 입금하세요.`);
+      return;
+    }
     setLoading(true);
     try {
       // Switch to Polygon

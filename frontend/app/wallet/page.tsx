@@ -13,8 +13,9 @@ interface WalletEntry {
 }
 
 interface WithdrawableInfo {
-  total_pnl_usdt: number;
   wallet_balance_usdt: number;
+  locked_in_bots_usdt: number;
+  total_pnl_usdt: number;
   pending_withdrawal_usdt: number;
   withdrawable_usdt: number;
   bot_details: { bot_id: number; bot_name: string; allocated_usdt: number; pnl_usdt: number }[];
@@ -53,6 +54,136 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   completed: { label: "완료", color: "var(--green)" },
   rejected: { label: "거절됨", color: "var(--red)" },
 };
+
+const POLYGON_CHAIN_ID = "0x89";
+const USDT_CONTRACT = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
+const ADMIN_WALLET = process.env.NEXT_PUBLIC_ADMIN_WALLET || "";
+
+function DepositModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const [amount, setAmount] = useState("");
+  const [step, setStep] = useState<"input" | "sending" | "verifying" | "done">("input");
+  const [error, setError] = useState("");
+
+  const handleDeposit = async () => {
+    const num = parseFloat(amount);
+    if (!num || num < 1) {
+      setError("최소 1 USDT 이상 입금하세요");
+      return;
+    }
+    if (!window.ethereum) {
+      setError("MetaMask가 필요합니다");
+      return;
+    }
+    if (!ADMIN_WALLET) {
+      setError("관리자 지갑 주소가 설정되지 않았습니다");
+      return;
+    }
+
+    setError("");
+    setStep("sending");
+
+    try {
+      // Switch to Polygon
+      try {
+        await window.ethereum.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: POLYGON_CHAIN_ID }],
+        });
+      } catch (switchError: unknown) {
+        const err = switchError as { code?: number };
+        if (err.code === 4902) {
+          await window.ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [{
+              chainId: POLYGON_CHAIN_ID,
+              chainName: "Polygon Mainnet",
+              nativeCurrency: { name: "MATIC", symbol: "MATIC", decimals: 18 },
+              rpcUrls: ["https://polygon-rpc.com"],
+              blockExplorerUrls: ["https://polygonscan.com"],
+            }],
+          });
+        }
+      }
+
+      const accounts = await window.ethereum.request({ method: "eth_accounts" }) as string[];
+      const from = accounts[0];
+
+      // Send USDT via ERC-20 transfer
+      const amountHex = (BigInt(Math.round(num * 1e6))).toString(16).padStart(64, "0");
+      const toHex = ADMIN_WALLET.slice(2).toLowerCase().padStart(64, "0");
+      const data = "0xa9059cbb" + toHex + amountHex;
+
+      const txHash = await window.ethereum.request({
+        method: "eth_sendTransaction",
+        params: [{ from, to: USDT_CONTRACT, data, value: "0x0" }],
+      }) as string;
+
+      // Verify on backend
+      setStep("verifying");
+      await apiFetch("/api/wallet/deposit/verify", {
+        method: "POST",
+        body: JSON.stringify({ tx_hash: txHash }),
+      });
+
+      setStep("done");
+      setTimeout(() => onSuccess(), 1500);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "입금 실패");
+      setStep("input");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)" }}>
+      <div className="w-full max-w-md rounded-2xl p-6" style={{ background: "var(--bg-panel)", border: "1px solid var(--border)" }}>
+        <h2 className="text-lg font-bold mb-4" style={{ color: "var(--text-primary)" }}>USDT 입금</h2>
+
+        {step === "done" ? (
+          <div className="text-center py-8">
+            <p className="text-2xl mb-2" style={{ color: "var(--green)" }}>입금 완료!</p>
+            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>잔액이 반영되었습니다.</p>
+          </div>
+        ) : (
+          <>
+            <div className="mb-4 p-3 rounded-lg text-sm" style={{ background: "var(--bg-base)" }}>
+              <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>입금 네트워크</p>
+              <p className="font-semibold" style={{ color: "var(--text-primary)" }}>Polygon (USDT)</p>
+              <p className="text-xs mt-2" style={{ color: "var(--text-secondary)" }}>
+                MetaMask에서 Polygon 네트워크의 USDT를 전송합니다.
+              </p>
+            </div>
+
+            <div className="mb-4">
+              <label className="text-xs mb-1 block" style={{ color: "var(--text-secondary)" }}>입금 금액 (USDT)</label>
+              <input
+                type="number" step="1" min="1" placeholder="100" title="입금 금액"
+                value={amount} onChange={(e) => setAmount(e.target.value)}
+                disabled={step !== "input"}
+                className="w-full px-3 py-2 rounded text-sm outline-none"
+                style={{ background: "var(--bg-base)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+              />
+            </div>
+
+            {error && <p className="text-xs mb-3" style={{ color: "var(--red)" }}>{error}</p>}
+
+            <div className="flex gap-3">
+              <button type="button" onClick={onClose} disabled={step !== "input"}
+                className="flex-1 py-2 rounded text-sm"
+                style={{ background: "var(--bg-base)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
+                취소
+              </button>
+              <button type="button" onClick={handleDeposit} disabled={step !== "input"}
+                className="flex-1 py-2 rounded text-sm font-medium text-white"
+                style={{ background: step !== "input" ? "#666" : "var(--blue)" }}>
+                {step === "sending" ? "MetaMask 확인 중..." : step === "verifying" ? "검증 중..." : "입금하기"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function WithdrawModal({
   info,
@@ -202,6 +333,7 @@ export default function WalletPage() {
   const [withdrawals, setWithdrawals] = useState<WithdrawalRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [showWithdraw, setShowWithdraw] = useState(false);
+  const [showDeposit, setShowDeposit] = useState(false);
   const { token, user, hydrate } = useAuthStore();
   const router = useRouter();
 
@@ -243,15 +375,22 @@ export default function WalletPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>내 자산</h1>
-          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>자산 현황 및 출금 관리</p>
+          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>입금 · 봇 투자 · 출금</p>
         </div>
-        {withdrawInfo && withdrawInfo.withdrawable_usdt > 0 && (
-          <button onClick={() => setShowWithdraw(true)}
-            className="px-5 py-2.5 rounded-lg text-sm font-medium text-white"
-            style={{ background: "var(--green)" }}>
-            출금 요청
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setShowDeposit(true)}
+            className="px-4 py-2.5 rounded-lg text-sm font-medium text-white"
+            style={{ background: "var(--blue)" }}>
+            입금
           </button>
-        )}
+          {withdrawInfo && withdrawInfo.withdrawable_usdt > 0 && (
+            <button type="button" onClick={() => setShowWithdraw(true)}
+              className="px-4 py-2.5 rounded-lg text-sm font-medium text-white"
+              style={{ background: "var(--green)" }}>
+              출금
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Total summary */}
@@ -270,23 +409,27 @@ export default function WalletPage() {
         </div>
       )}
 
-      {/* Withdrawable banner */}
-      {withdrawInfo && (withdrawInfo.total_pnl_usdt !== 0 || withdrawInfo.wallet_balance_usdt > 0) && (
-        <div className="mb-4 p-4 rounded-xl flex items-center justify-between"
-          style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)" }}>
-          <div>
-            <p className="text-xs" style={{ color: "var(--text-secondary)" }}>출금 가능 금액</p>
-            <p className="text-xl font-bold font-mono" style={{ color: "var(--green)" }}>
-              {withdrawInfo.withdrawable_usdt.toFixed(2)} USDT
+      {/* Balance breakdown */}
+      {withdrawInfo && (
+        <div className="mb-4 grid grid-cols-3 gap-3">
+          <div className="p-3 rounded-xl" style={{ background: "var(--bg-panel)", border: "1px solid var(--border)" }}>
+            <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>출금 가능</p>
+            <p className="text-lg font-bold font-mono" style={{ color: "var(--green)" }}>
+              {withdrawInfo.withdrawable_usdt.toFixed(2)}
             </p>
           </div>
-          {withdrawInfo.withdrawable_usdt > 0 && (
-            <button onClick={() => setShowWithdraw(true)}
-              className="px-4 py-2 rounded text-sm font-medium text-white"
-              style={{ background: "var(--green)" }}>
-              출금
-            </button>
-          )}
+          <div className="p-3 rounded-xl" style={{ background: "var(--bg-panel)", border: "1px solid var(--border)" }}>
+            <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>봇 투자중</p>
+            <p className="text-lg font-bold font-mono" style={{ color: "var(--blue)" }}>
+              {withdrawInfo.locked_in_bots_usdt.toFixed(2)}
+            </p>
+          </div>
+          <div className="p-3 rounded-xl" style={{ background: "var(--bg-panel)", border: "1px solid var(--border)" }}>
+            <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>봇 수익</p>
+            <p className="text-lg font-bold font-mono" style={{ color: withdrawInfo.total_pnl_usdt >= 0 ? "var(--green)" : "var(--red)" }}>
+              {withdrawInfo.total_pnl_usdt >= 0 ? "+" : ""}{withdrawInfo.total_pnl_usdt.toFixed(2)}
+            </p>
+          </div>
         </div>
       )}
 
@@ -403,6 +546,17 @@ export default function WalletPage() {
         <a href="/exchange/BTC_USDT" className="hover:underline" style={{ color: "var(--blue)" }}>거래소로 이동 →</a>
         <a href="/my-bots" className="hover:underline" style={{ color: "var(--text-secondary)" }}>내 봇 →</a>
       </div>
+
+      {/* Deposit modal */}
+      {showDeposit && (
+        <DepositModal
+          onClose={() => setShowDeposit(false)}
+          onSuccess={() => {
+            setShowDeposit(false);
+            loadData();
+          }}
+        />
+      )}
 
       {/* Withdraw modal */}
       {showWithdraw && withdrawInfo && user && (
