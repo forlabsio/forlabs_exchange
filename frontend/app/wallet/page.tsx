@@ -185,6 +185,85 @@ function DepositModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
   );
 }
 
+function AdminDepositModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const { user } = useAuthStore();
+  const [amount, setAmount] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  const handleDeposit = async () => {
+    const num = parseFloat(amount);
+    if (!num || num <= 0) {
+      setError("유효한 금액을 입력하세요");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      await apiFetch("/api/wallet/deposit", {
+        method: "POST",
+        body: JSON.stringify({ user_id: user!.id, asset: "USDT", amount: num }),
+      });
+      setDone(true);
+      setTimeout(() => onSuccess(), 1200);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "충전 실패");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)" }}>
+      <div className="w-full max-w-md rounded-2xl p-6" style={{ background: "var(--bg-panel)", border: "1px solid var(--border)" }}>
+        <h2 className="text-lg font-bold mb-4" style={{ color: "var(--text-primary)" }}>관리자 직접 충전</h2>
+
+        {done ? (
+          <div className="text-center py-8">
+            <p className="text-2xl mb-2" style={{ color: "var(--green)" }}>충전 완료!</p>
+            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>잔액이 반영되었습니다.</p>
+          </div>
+        ) : (
+          <>
+            <div className="mb-4 p-3 rounded-lg text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)" }}>
+              <p className="text-xs font-medium" style={{ color: "#f59e0b" }}>관리자 전용</p>
+              <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                온체인 전송 없이 내부 잔액에 직접 반영됩니다.
+              </p>
+            </div>
+
+            <div className="mb-4">
+              <label className="text-xs mb-1 block" style={{ color: "var(--text-secondary)" }}>충전 금액 (USDT)</label>
+              <input
+                type="number" step="1" min="1" placeholder="1000" title="충전 금액"
+                value={amount} onChange={(e) => setAmount(e.target.value)}
+                className="w-full px-3 py-2 rounded text-sm outline-none"
+                style={{ background: "var(--bg-base)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+              />
+            </div>
+
+            {error && <p className="text-xs mb-3" style={{ color: "var(--red)" }}>{error}</p>}
+
+            <div className="flex gap-3">
+              <button type="button" onClick={onClose}
+                className="flex-1 py-2 rounded text-sm"
+                style={{ background: "var(--bg-base)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
+                취소
+              </button>
+              <button type="button" onClick={handleDeposit} disabled={submitting}
+                className="flex-1 py-2 rounded text-sm font-medium text-white"
+                style={{ background: submitting ? "#666" : "#f59e0b" }}>
+                {submitting ? "처리중..." : "직접 충전"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function WithdrawModal({
   info,
   walletAddress,
@@ -334,6 +413,7 @@ export default function WalletPage() {
   const [loading, setLoading] = useState(true);
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [showDeposit, setShowDeposit] = useState(false);
+  const [showAdminDeposit, setShowAdminDeposit] = useState(false);
   const { token, user, hydrate } = useAuthStore();
   const router = useRouter();
 
@@ -378,6 +458,13 @@ export default function WalletPage() {
           <p className="text-sm" style={{ color: "var(--text-secondary)" }}>입금 · 봇 투자 · 출금</p>
         </div>
         <div className="flex gap-2">
+          {user?.role === "admin" && (
+            <button type="button" onClick={() => setShowAdminDeposit(true)}
+              className="px-4 py-2.5 rounded-lg text-sm font-medium"
+              style={{ background: "rgba(245,158,11,0.2)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)" }}>
+              직접 충전
+            </button>
+          )}
           <button type="button" onClick={() => setShowDeposit(true)}
             className="px-4 py-2.5 rounded-lg text-sm font-medium text-white"
             style={{ background: "var(--blue)" }}>
@@ -546,6 +633,17 @@ export default function WalletPage() {
         <a href="/exchange/BTC_USDT" className="hover:underline" style={{ color: "var(--blue)" }}>거래소로 이동 →</a>
         <a href="/my-bots" className="hover:underline" style={{ color: "var(--text-secondary)" }}>내 봇 →</a>
       </div>
+
+      {/* Admin direct deposit modal */}
+      {showAdminDeposit && (
+        <AdminDepositModal
+          onClose={() => setShowAdminDeposit(false)}
+          onSuccess={() => {
+            setShowAdminDeposit(false);
+            loadData();
+          }}
+        />
+      )}
 
       {/* Deposit modal */}
       {showDeposit && (
