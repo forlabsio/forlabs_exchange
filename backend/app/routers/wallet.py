@@ -231,7 +231,7 @@ async def deposit(body: dict, user: User = Depends(require_admin), db: AsyncSess
     amount = float(body["amount"])
     wallet = await db.scalar(select(Wallet).where(Wallet.user_id == target_user_id, Wallet.asset == asset))
     if wallet:
-        wallet.balance += amount
+        wallet.balance = float(wallet.balance or 0) + amount
     else:
         db.add(Wallet(user_id=target_user_id, asset=asset, balance=amount))
     await db.commit()
