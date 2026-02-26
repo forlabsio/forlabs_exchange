@@ -9,8 +9,17 @@ from app.models.bot import Bot, BotStatus, BotSubscription, BotPerformance
 from app.models.payment import PaymentHistory
 from app.models.withdrawal import Withdrawal, WithdrawalStatus
 from app.schemas.bot import CreateBotRequest, UpdateBotRequest
+from app.config import settings
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+@router.get("/system-status")
+async def system_status(admin: User = Depends(require_admin)):
+    """Return system mode info (simulation vs live)."""
+    return {
+        "live_trading": settings.BINANCE_LIVE_TRADING,
+    }
 
 
 @router.get("/bots")

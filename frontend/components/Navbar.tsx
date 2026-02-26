@@ -1,16 +1,26 @@
 "use client";
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useAuthStore } from "@/stores/authStore";
 import { useRouter } from "next/navigation";
+import { apiFetch } from "@/lib/api";
 
 export default function Navbar() {
   const { token, user, logout, hydrate } = useAuthStore();
   const router = useRouter();
+  const [isSimulation, setIsSimulation] = useState(false);
 
   useEffect(() => {
     hydrate();
   }, []);
+
+  useEffect(() => {
+    if (user?.role === "admin") {
+      apiFetch("/api/admin/system-status")
+        .then((data) => setIsSimulation(!data.live_trading))
+        .catch(() => {});
+    }
+  }, [user]);
 
   const handleLogout = () => {
     logout();
@@ -34,6 +44,12 @@ export default function Navbar() {
           )}
           {user?.role === "admin" && (
             <>
+              {isSimulation && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide animate-pulse"
+                  style={{ background: "rgba(239,68,68,0.2)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.4)" }}>
+                  SIMULATION
+                </span>
+              )}
               <Link href="/admin/bots" className="hover:text-white transition-colors font-medium" style={{ color: "#f59e0b" }}>
                 봇 관리
               </Link>
