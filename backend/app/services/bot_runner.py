@@ -11,95 +11,114 @@ from app.models.order import Order, OrderSide, OrderType
 from app.core.redis import get_redis
 from app.services.matching_engine import try_fill_order, try_fill_order_live
 from app.config import settings
-from app.services.indicators import calc_rsi, calc_ma, calc_bollinger
-from app.services.market_data import fetch_klines
+from app.services.strategies import STRATEGIES
+from app.services.position_manager import PositionManager
 
-async def generate_signal(bot: Bot, pair: str) -> Optional[str]:
+
+# ---------------------------------------------------------------------------
+# ATR-based position sizing
+# ---------------------------------------------------------------------------
+
+def calc_quantity_from_risk(
+    allocated_usdt: Decimal,
+    price: Decimal,
+    risk_pct: float,
+    atr: float,
+    stop_loss_atr: Optional[float],
+) -> Decimal:
+    """Calculate base-asset quantity from risk budget and ATR-based stop distance.
+
+    risk_amount = allocated * risk_pct / 100
+    stop_distance = atr * stop_loss_atr
+    quantity = risk_amount / stop_distance
+
+    Falls back to risk_amount / price when ATR or stop_loss_atr is zero/None.
+    """
+    risk_amount = allocated_usdt * Decimal(str(risk_pct)) / Decimal("100")
+
+    if atr and stop_loss_atr:
+        stop_distance = Decimal(str(float(atr) * float(stop_loss_atr)))
+        if stop_distance > 0:
+            return (risk_amount / stop_distance).quantize(Decimal("0.00001"))
+
+    # Fallback: simple fraction of allocation at current price
+    if price > 0:
+        return (risk_amount / price).quantize(Decimal("0.00001"))
+    return Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# Signal generation (delegates to strategy classes)
+# ---------------------------------------------------------------------------
+
+async def generate_signal(bot: Bot, pair: str) -> Optional[dict]:
+    """Generate a trading signal using the bot's configured strategy class.
+
+    Returns a signal dict (with side, risk_pct, atr, etc.) or None.
+    Enforces cooldown via Redis with direction-aware intervals.
+    """
     redis = await get_redis()
     config = bot.strategy_config or {}
-    interval = config.get("signal_interval", 300)
+    signal_interval = config.get("signal_interval", 300)
 
+    # --- Cooldown check ---
     last_trade_key = f"bot:{bot.id}:last_trade_time"
+    last_side_key = f"bot:{bot.id}:last_side"
     last_trade = await redis.get(last_trade_key)
     now = int(time.time())
-    if last_trade and now - int(last_trade) < interval:
+
+    if last_trade and signal_interval > 0:
+        elapsed = now - int(last_trade)
+        if elapsed < signal_interval:
+            return None
+
+    # --- Strategy lookup ---
+    strategy_type = bot.strategy_type or "rsi_trend"
+    strategy_cls = STRATEGIES.get(strategy_type)
+    if strategy_cls is None:
+        print(f"Unknown strategy type '{strategy_type}' for bot {bot.id}")
         return None
 
-    strategy = bot.strategy_type or "alternating"
-    signal: Optional[str] = None
+    strategy = strategy_cls(config)
 
-    if strategy == "alternating":
-        last_side_key = f"bot:{bot.id}:last_side"
-        last_side = await redis.get(last_side_key)
-        signal = "sell" if last_side == "buy" else "buy"
-        await redis.set(last_side_key, signal)
+    try:
+        signal = await strategy.generate(pair)
+    except Exception as e:
+        print(f"Strategy '{strategy_type}' error for bot {bot.id}: {e}")
+        return None
 
-    elif strategy == "rsi":
-        period = int(config.get("rsi_period", 14))
-        oversold = float(config.get("oversold", 30))
-        overbought = float(config.get("overbought", 70))
-        try:
-            klines = await fetch_klines(pair, "1h", period + 5)
-            closes = [float(k["close"]) for k in klines]
-            rsi = calc_rsi(closes, period)
-            if rsi < oversold:
-                signal = "buy"
-            elif rsi > overbought:
-                signal = "sell"
-        except Exception as e:
-            print(f"RSI signal error bot {bot.id}: {e}")
+    if not signal:
+        return None
 
-    elif strategy == "ma_cross":
-        fast = int(config.get("fast_period", 5))
-        slow = int(config.get("slow_period", 20))
-        if fast >= slow:
-            print(f"MA cross bot {bot.id}: fast_period ({fast}) must be < slow_period ({slow}), skipping")
+    # --- Direction-based cooldown ---
+    last_side = await redis.get(last_side_key)
+    new_side = signal["side"]
+
+    if last_trade and last_side:
+        cooldown_same = config.get("cooldown_same", signal_interval)
+        cooldown_opposite = config.get("cooldown_opposite", signal_interval // 3 if signal_interval else 0)
+        elapsed = now - int(last_trade)
+
+        if new_side == last_side and elapsed < cooldown_same:
             return None
-        try:
-            klines = await fetch_klines(pair, "1h", slow + 5)
-            closes = [float(k["close"]) for k in klines]
-            if len(closes) < slow + 1:
-                return None
-            fast_ma = calc_ma(closes, fast)
-            slow_ma = calc_ma(closes, slow)
-            prev_fast = calc_ma(closes[:-1], fast)
-            prev_slow = calc_ma(closes[:-1], slow)
-            if prev_fast <= prev_slow and fast_ma > slow_ma:
-                signal = "buy"   # golden cross
-            elif prev_fast >= prev_slow and fast_ma < slow_ma:
-                signal = "sell"  # death cross
-        except Exception as e:
-            print(f"MA cross signal error bot {bot.id}: {e}")
+        if new_side != last_side and elapsed < cooldown_opposite:
+            return None
 
-    elif strategy == "boll":
-        period = int(config.get("period", 20))
-        std_dev = float(config.get("deviation", 2.0))
-        try:
-            klines = await fetch_klines(pair, "1h", period + 5)
-            closes = [float(k["close"]) for k in klines]
-            lower, upper = calc_bollinger(closes, period, std_dev)
-            current = closes[-1]
-            if current <= lower:
-                signal = "buy"
-            elif current >= upper:
-                signal = "sell"
-        except Exception as e:
-            print(f"Bollinger signal error bot {bot.id}: {e}")
+    # --- Record trade time and side ---
+    await redis.set(last_trade_key, str(now))
+    await redis.set(last_side_key, new_side)
 
-    # Only update the cooldown timer when a real signal was produced.
-    # `alternating` always produces a signal; indicator strategies may return None on neutral markets.
-    if signal:
-        await redis.set(last_trade_key, now)
     return signal
 
+
+# ---------------------------------------------------------------------------
+# Bot execution (per-subscription logic)
+# ---------------------------------------------------------------------------
+
 async def run_bot(bot: Bot):
+    """Execute one cycle of the bot for all active subscriptions."""
     config = bot.strategy_config or {}
     pair = config.get("pair", "BTC_USDT")
-    trade_pct = config.get("trade_pct", 10)
-
-    signal = await generate_signal(bot, pair)
-    if not signal:
-        return
 
     async with AsyncSessionLocal() as db:
         subs = await db.scalars(
@@ -111,11 +130,77 @@ async def run_bot(bot: Bot):
         sub_list = list(subs)
 
         for sub in sub_list:
-            # Skip expired subscriptions
+            # 1. Check expiry -> deactivate if expired
             if sub.expires_at and sub.expires_at.replace(tzinfo=None) < datetime.utcnow():
                 sub.is_active = False
                 await db.commit()
                 continue
+
+            # 2. Get current price from Redis
+            redis = await get_redis()
+            ticker = await redis.get(f"market:{pair}:ticker")
+            if not ticker:
+                continue
+            price = Decimal(json.loads(ticker)["last_price"])
+            price_float = float(price)
+
+            # 3. Create PositionManager
+            pm = PositionManager(bot.id, sub.user_id)
+
+            # 4. Check exit first: SL/TP/trailing
+            exit_reason = await pm.check_exit(price_float)
+            if exit_reason:
+                # Close position via sell order
+                pos = await pm.get_position()
+                if pos:
+                    from app.models.wallet import Wallet
+                    from sqlalchemy import select as sel
+
+                    base, quote = pair.split("_")
+                    base_wallet = await db.scalar(
+                        sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == base)
+                    )
+                    if base_wallet and base_wallet.balance > 0:
+                        exit_qty = base_wallet.balance.quantize(Decimal("0.00001"))
+                        if exit_qty > 0:
+                            exit_side = "sell" if pos["side"] == "buy" else "buy"
+                            order = Order(
+                                user_id=sub.user_id,
+                                pair=pair,
+                                side=OrderSide(exit_side),
+                                type=OrderType.market,
+                                quantity=exit_qty,
+                                is_bot_order=True,
+                                bot_id=bot.id,
+                            )
+                            db.add(order)
+                            await db.flush()
+                            if settings.BINANCE_LIVE_TRADING:
+                                await try_fill_order_live(db, order)
+                            else:
+                                await try_fill_order(db, order)
+                            print(f"Bot {bot.id} user {sub.user_id}: exit ({exit_reason}) {exit_side} {exit_qty} @ {price}")
+
+                await pm.close_position()
+                continue
+
+            # 5. Skip if already in position (except adaptive_grid)
+            strategy_type = bot.strategy_type or "rsi_trend"
+            has_pos = await pm.has_position()
+            if has_pos and strategy_type != "adaptive_grid":
+                continue
+
+            # 6. Generate signal
+            signal = await generate_signal(bot, pair)
+            if not signal:
+                continue
+
+            side = signal["side"]
+            risk_pct = signal.get("risk_pct", 1.0)
+            atr = signal.get("atr", 0)
+            stop_loss_atr = signal.get("stop_loss_atr")
+            take_profit_atr = signal.get("take_profit_atr")
+            trailing_atr = signal.get("trailing_atr")
 
             from app.models.wallet import Wallet
             from sqlalchemy import select as sel
@@ -123,61 +208,50 @@ async def run_bot(bot: Bot):
             base, quote = pair.split("_")
             allocated = Decimal(str(sub.allocated_usdt or 100))
 
-            # Estimate how much USDT the bot has already deployed for this user
-            # by summing buy costs and subtracting sell proceeds from filled bot orders
-            bot_orders_result = await db.scalars(
-                sel(Order).where(
-                    Order.user_id == sub.user_id,
-                    Order.bot_id == bot.id,
-                    Order.status == "filled",
-                )
-            )
-            deployed = Decimal("0")
-            for o in bot_orders_result:
-                price_val = Decimal(str(o.price or 0))
-                qty_val = Decimal(str(o.filled_quantity or 0))
-                if o.side == "buy":
-                    deployed += qty_val * price_val
-                else:
-                    deployed -= qty_val * price_val
-
-            redis = await get_redis()
-            ticker = await redis.get(f"market:{pair}:ticker")
-            if not ticker:
-                continue
-            price = Decimal(json.loads(ticker)["last_price"])
-
-            if signal == "buy":
-                available = allocated - deployed
-                if available <= Decimal("0"):
-                    continue  # allocation fully deployed
-                wallet = await db.scalar(
-                    sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == quote)
-                )
-                if not wallet or wallet.balance <= 0:
-                    continue
-                spend = min(
-                    wallet.balance * Decimal(str(trade_pct / 100)),
-                    available,
-                )
-                quantity = (spend / price).quantize(Decimal("0.00001"))
-            else:  # sell
-                wallet = await db.scalar(
-                    sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == base)
-                )
-                if not wallet or wallet.balance <= 0:
-                    continue
-                quantity = (wallet.balance * Decimal(str(trade_pct / 100))).quantize(
-                    Decimal("0.00001")
+            # 7. Calculate quantity using ATR-based sizing
+            if strategy_type == "adaptive_grid":
+                # Grid: simple percentage of allocation
+                grid_pct = signal.get("risk_pct", 0.4)
+                spend = allocated * Decimal(str(grid_pct)) / Decimal("100")
+                quantity = (spend / price).quantize(Decimal("0.00001")) if price > 0 else Decimal("0")
+            else:
+                quantity = calc_quantity_from_risk(
+                    allocated_usdt=allocated,
+                    price=price,
+                    risk_pct=risk_pct,
+                    atr=atr,
+                    stop_loss_atr=stop_loss_atr,
                 )
 
             if quantity <= 0:
                 continue
 
+            # 8. Cap quantity by wallet balance
+            if side == "buy":
+                wallet = await db.scalar(
+                    sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == quote)
+                )
+                if not wallet or wallet.balance <= 0:
+                    continue
+                max_spend = wallet.balance
+                max_qty = (max_spend / price).quantize(Decimal("0.00001")) if price > 0 else Decimal("0")
+                quantity = min(quantity, max_qty)
+            else:
+                wallet = await db.scalar(
+                    sel(Wallet).where(Wallet.user_id == sub.user_id, Wallet.asset == base)
+                )
+                if not wallet or wallet.balance <= 0:
+                    continue
+                quantity = min(quantity, wallet.balance.quantize(Decimal("0.00001")))
+
+            if quantity <= 0:
+                continue
+
+            # 9. Create and fill order
             order = Order(
                 user_id=sub.user_id,
                 pair=pair,
-                side=OrderSide(signal),
+                side=OrderSide(side),
                 type=OrderType.market,
                 quantity=quantity,
                 is_bot_order=True,
@@ -185,12 +259,31 @@ async def run_bot(bot: Bot):
             )
             db.add(order)
             await db.flush()
+
             if settings.BINANCE_LIVE_TRADING:
-                await try_fill_order_live(db, order)
+                result = await try_fill_order_live(db, order)
             else:
-                await try_fill_order(db, order)
+                result = await try_fill_order(db, order)
+
+            # 10. Open position tracking (for strategies with SL/TP)
+            if result.get("filled") and stop_loss_atr and side == "buy":
+                fill_price = float(result.get("fill_price", price_float))
+                await pm.open_position(
+                    side=side,
+                    entry_price=fill_price,
+                    atr=float(atr),
+                    stop_loss_atr=float(stop_loss_atr),
+                    take_profit_atr=float(take_profit_atr) if take_profit_atr else None,
+                    trailing_atr=float(trailing_atr) if trailing_atr else None,
+                )
+
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
 
 async def bot_runner_loop():
+    """Run all active bots every 10 seconds."""
     while True:
         async with AsyncSessionLocal() as db:
             bots = await db.scalars(select(Bot).where(Bot.status == BotStatus.active))
