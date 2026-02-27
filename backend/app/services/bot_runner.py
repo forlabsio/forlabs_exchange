@@ -88,6 +88,9 @@ async def generate_signal(bot: Bot, pair: str) -> Optional[dict]:
         return None
 
     if not signal:
+        # Log every ~5 min why no signal (only when cooldown passed)
+        if _loop_count % 30 == 1:
+            print(f"[Bot {bot.id}] {strategy_type} on {pair}: no signal (market conditions not met)")
         return None
 
     # --- Direction-based cooldown ---
@@ -128,6 +131,9 @@ async def run_bot(bot: Bot):
             )
         )
         sub_list = list(subs)
+
+        if not sub_list and _loop_count % 30 == 1:
+            print(f"[Bot {bot.id}] No active subscriptions, skipping")
 
         for sub in sub_list:
             # 1. Check expiry -> deactivate if expired (close positions first)
@@ -313,12 +319,22 @@ async def run_bot(bot: Bot):
 # Main loop
 # ---------------------------------------------------------------------------
 
+_loop_count = 0
+
 async def bot_runner_loop():
     """Run all active bots every 10 seconds."""
+    global _loop_count
+    print("[BotRunner] Starting bot runner loop")
     while True:
+        _loop_count += 1
         async with AsyncSessionLocal() as db:
             bots = await db.scalars(select(Bot).where(Bot.status == BotStatus.active))
             bot_list = list(bots)
+
+        # Log summary every 30 cycles (~5 minutes)
+        if _loop_count % 30 == 1:
+            active_ids = [b.id for b in bot_list]
+            print(f"[BotRunner] cycle={_loop_count}, active_bots={active_ids}")
 
         kill_redis = await get_redis()
         for bot in bot_list:
